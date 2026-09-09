@@ -19,10 +19,10 @@ RUN npm install
 
 COPY . .
 
-# Absolute, because the working directory differs between the Prisma CLI at
-# build time and the server at run time. bootstrap.ts restores demo.db to this
-# exact path on a cold start.
-ENV DATABASE_URL="file:/app/services/api/prisma/dev.db"
+# Relative to the Prisma schema directory, which is how Prisma resolves it, so
+# this lands at /app/services/api/prisma/dev.db. bootstrap.ts restores demo.db
+# to that same path on a cold start.
+ENV DATABASE_URL="file:./dev.db"
 ENV NODE_ENV=production
 
 # Builds the shared package, generates the Prisma client, compiles the API and

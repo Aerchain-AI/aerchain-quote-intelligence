@@ -1,18 +1,28 @@
-# One-click deploy for Render. Docker keeps the build identical to a local
-# `docker build`, so what the interviewer opens is what you tested.
+# One-click deploy to Render's free tier.
+#
+# This uses the Node runtime rather than Docker, because these are the exact
+# commands the project is built and started with locally — the same `npm run
+# build && npm start` that serves the whole prototype on one port. A Dockerfile
+# is included too if you would rather deploy a container.
 services:
   - type: web
     name: aerchain-quote-intelligence
-    runtime: docker
+    runtime: node
     plan: free
-    dockerfilePath: ./Dockerfile
+    buildCommand: npm install && npm run build
+    startCommand: npm start
     healthCheckPath: /health
     envVars:
-      # Set this in the Render dashboard, not here. Comma-separated Gemini keys;
-      # the pool fails over to the next one when a key hits its daily quota.
-      # Leave it unset and every screen still works — the shipped database is
-      # already extracted. Only live upload needs a key.
+      - key: NODE_VERSION
+        value: 22.16.0
+      # Prisma resolves this against the schema directory, so it lands at
+      # services/api/prisma/dev.db on any host. bootstrap.ts restores the
+      # shipped demo snapshot there on a cold start.
+      - key: DATABASE_URL
+        value: file:./dev.db
+      # Set the value in the Render dashboard, never in this file. Comma-
+      # separated Gemini keys; the pool fails over when one hits its daily
+      # quota. Leave it unset and every screen still works — the shipped
+      # database is already extracted. Only live upload needs a key.
       - key: GEMINI_API_KEYS
         sync: false
-      - key: DATABASE_URL
-        value: file:/app/services/api/prisma/dev.db
