@@ -25,3 +25,9 @@ Thumbs.db
 .agents/
 .claude/
 skills-lock.json
+
+# Local database backups, not part of the deliverable
+backup/
+
+# Vendor response documents are created per import; only the reference set is tracked.
+data/vendor-documents/vendor-*-*-*-*-*.*

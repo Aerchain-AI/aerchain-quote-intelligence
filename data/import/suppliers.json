@@ -1,0 +1,16 @@
+[
+  {
+    "name": "REPLACE ME - real company name",
+    "email": "sales@example.com",
+    "category": "Corrugated Packaging",
+    "pastWork": "One line on what they have supplied before.",
+    "eventsInvited": 8,
+    "eventsQuoted": 7,
+    "eventsAwarded": 3,
+    "avgResponseDays": 2.4,
+    "onTimeDeliveryPct": 94.2,
+    "qualityScore": 0.88,
+    "lastEngagedAt": "2026-07-14",
+    "isNew": false
+  }
+]

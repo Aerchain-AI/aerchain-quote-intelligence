@@ -1,0 +1,16 @@
+[
+  {
+    "name": "REPLACE ME - distinctive event name",
+    "category": "Corrugated Packaging",
+    "description": "What is being sourced and what it supports.",
+    "currency": "INR",
+    "requiredByDate": "2027-01-15",
+    "status": "active",
+    "buyerEmail": "priya.sharma@yourcompany.com",
+    "lineItems": [
+      { "name": "5-Ply Corrugated Box - Small", "specification": "300x200x150 mm", "quantity": 10000, "unit": "pcs" },
+      { "name": "3-Ply Corrugated Box - Medium", "specification": "350x250x200 mm", "quantity": 8000, "unit": "pcs" }
+    ],
+    "invitedSupplierEmails": ["sales@example.com"]
+  }
+]

@@ -17,7 +17,9 @@
     "warm-copilot": "tsx src/scripts/warmCopilot.ts",
     "key-status": "tsx src/scripts/keyStatus.ts",
     "generate:inbound-samples": "tsx src/scripts/generateInboundSamples.ts",
-    "inbox:reset": "tsx src/scripts/resetInbox.ts"
+    "inbox:reset": "tsx src/scripts/resetInbox.ts",
+    "import:data": "tsx src/scripts/importData.ts",
+    "db:wipe": "tsx src/scripts/wipeDatabase.ts"
   },
   "dependencies": {
     "@aerchain/shared": "*",
