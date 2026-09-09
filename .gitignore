@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+.env
+*.log
+# The working database is scratch state. The demo snapshot beside it is not —
+# it is what a deployed instance restores on a cold start, so it is committed.
+services/api/prisma/dev.db
+services/api/prisma/dev.db-journal
+services/api/prisma/dev.db-wal
+!services/api/prisma/demo.db
+data/generated/
+.DS_Store
+
+# Local editor and OS noise
+.vscode/
+.idea/
+Thumbs.db
+
+# Skills installed via `npx skills add` are not part of the deliverable
+.agents/
+.claude/
+skills-lock.json

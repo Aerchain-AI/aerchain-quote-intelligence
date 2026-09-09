@@ -1,0 +1,32 @@
+{
+  "name": "aerchain-quote-intelligence-copilot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-powered procurement workspace prototype \u2014 Quote Intelligence Copilot",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=packages/shared && npm run prisma:generate --workspace=services/api && npm run build --workspace=services/api && npm run build --workspace=apps/web",
+    "seed": "npm run seed --workspace=services/api",
+    "generate:vendor-docs": "npm run generate:vendor-docs --workspace=services/api",
+    "pipeline:demo": "npm run pipeline:demo --workspace=services/api",
+    "dev:api": "npm run dev --workspace=services/api",
+    "test": "npm run test --workspace=services/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
+    "break-tests": "npm run break-tests --workspace=services/api",
+    "warm-copilot": "npm run warm-copilot --workspace=services/api",
+    "key-status": "npm run key-status --workspace=services/api",
+    "setup": "npm install && npm run prisma:generate --workspace=services/api",
+    "start": "npm run start --workspace=services/api",
+    "prisma:push": "npm run prisma:push --workspace=services/api",
+    "demo:snapshot": "node scripts/snapshot-demo-db.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "typescript": "^5.5.4"
+  }
+}

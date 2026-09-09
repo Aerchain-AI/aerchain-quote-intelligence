@@ -1,0 +1,167 @@
+import type { Currency, FxRateInfo, LineItem, MoneyAdjustment } from "@aerchain/shared";
+import { USD_TO_INR_RATE } from "@aerchain/shared";
+import type { ExtractedLineItem } from "../extraction/tool.js";
+
+const UNIT_WORDS: Record<string, string[]> = {
+  pcs: ["piece", "pieces", "pc", "pcs", "unit", "units"],
+  sheets: ["sheet", "sheets"],
+  rolls: ["roll", "rolls"],
+  kg: ["kg", "kgs", "kilogram", "kilograms"],
+};
+
+export interface UnitParseResult {
+  /** number of source-units per 1 RFx-unit price, e.g. 100 for "per 100 pieces" */
+  factor: number;
+  /** false when the source unit text couldn't be confidently matched to the RFx unit family */
+  recognized: boolean;
+}
+
+/** Deterministic unit-quantity parsing — PRD §29: normalize automatically when the
+ * conversion is clear ("per 100 pieces" -> divide by 100); never invent a factor. */
+export function parseSourceUnit(sourceUnit: string | null, rfxUnit: string): UnitParseResult {
+  if (!sourceUnit) return { factor: 1, recognized: false };
+  const normalized = sourceUnit.toLowerCase();
+
+  const perNMatch = normalized.match(/per\s+(\d+)/);
+  if (perNMatch) return { factor: Number(perNMatch[1]), recognized: true };
+
+  const words = UNIT_WORDS[rfxUnit] ?? [];
+  if (words.some((w) => normalized.includes(w))) return { factor: 1, recognized: true };
+
+  return { factor: 1, recognized: false };
+}
+
+export interface CurrencyConversionResult {
+  value: number;
+  fxRateUsed: FxRateInfo | null;
+}
+
+/** Deterministic currency conversion using a fixed, disclosed reference rate
+ * (PRD §28) — never a silent/hidden conversion. */
+export function convertToBaseCurrency(value: number, from: Currency, to: Currency): CurrencyConversionResult {
+  if (from === to) return { value, fxRateUsed: null };
+  if (from === "USD" && to === "INR") {
+    return { value: value * USD_TO_INR_RATE.rate, fxRateUsed: USD_TO_INR_RATE };
+  }
+  throw new Error(`Unsupported currency conversion: ${from} -> ${to}`);
+}
+
+/** Parses a freight/discount/tax phrase into a numeric adjustment only when it is
+ * unambiguous ("₹1.20 per kg", "5%"). Anything else is left null — the caller
+ * surfaces the raw text as an exception instead of guessing a number (PRD §29). */
+export function parseMoneyAdjustmentText(text: string | null): MoneyAdjustment | null {
+  if (!text || !text.trim()) return null;
+
+  const pctMatch = text.match(/([\d.]+)\s*%/);
+  if (pctMatch) {
+    return { amount: Number(pctMatch[1]), unit: "% of value", basis: "document text", notes: text };
+  }
+
+  const perMatch = text.match(/(?:rs\.?|₹|\$|usd)?\s*([\d,]+(?:\.\d+)?)\s*(?:per|\/)\s*([a-zA-Z]+)/i);
+  if (perMatch) {
+    return {
+      amount: Number(perMatch[1].replace(/,/g, "")),
+      unit: `per ${perMatch[2].toLowerCase()}`,
+      basis: "document text",
+      notes: text,
+    };
+  }
+
+  return null;
+}
+
+function isPercent(adj: MoneyAdjustment): boolean {
+  return adj.unit.includes("%");
+}
+
+function matchesRfxUnit(adj: MoneyAdjustment, rfxUnit: string): boolean {
+  const words = UNIT_WORDS[rfxUnit] ?? [];
+  return words.some((w) => adj.unit.toLowerCase().includes(w));
+}
+
+export interface NormalizedQuote {
+  normalizedValue: number | null;
+  normalizedCurrency: Currency;
+  normalizedUnit: string;
+  evaluatedValue: number | null;
+  fxRateUsed: FxRateInfo | null;
+  discount: MoneyAdjustment | null;
+  freight: MoneyAdjustment | null;
+  tax: MoneyAdjustment | null;
+  unitRecognized: boolean;
+}
+
+const BASE_CURRENCY: Currency = "INR";
+
+/** Turns one extracted line-item candidate into a normalized, evaluated quote.
+ * All math here is plain arithmetic — nothing is delegated to the LLM. */
+export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineItem): NormalizedQuote {
+  const discount = parseMoneyAdjustmentText(extracted.discountText);
+  const freight = parseMoneyAdjustmentText(extracted.freightText);
+  const tax = parseMoneyAdjustmentText(extracted.taxText);
+
+  if (!extracted.quoted || extracted.sourceValue == null || !extracted.sourceCurrency) {
+    return {
+      normalizedValue: null,
+      normalizedCurrency: BASE_CURRENCY,
+      normalizedUnit: rfxLineItem.unit,
+      evaluatedValue: null,
+      fxRateUsed: null,
+      discount,
+      freight,
+      tax,
+      unitRecognized: false,
+    };
+  }
+
+  const { factor, recognized } = parseSourceUnit(extracted.sourceUnit, rfxLineItem.unit);
+  const { value: inBaseCurrency, fxRateUsed } = convertToBaseCurrency(
+    extracted.sourceValue,
+    extracted.sourceCurrency,
+    BASE_CURRENCY,
+  );
+
+  if (!recognized) {
+    // A unit we can't confidently reconcile with the RFx unit — flag, don't guess.
+    return {
+      normalizedValue: null,
+      normalizedCurrency: BASE_CURRENCY,
+      normalizedUnit: rfxLineItem.unit,
+      evaluatedValue: null,
+      fxRateUsed,
+      discount,
+      freight,
+      tax,
+      unitRecognized: false,
+    };
+  }
+
+  const normalizedValue = Math.round((inBaseCurrency / factor) * 100) / 100;
+
+  let evaluated = normalizedValue;
+  if (freight && !isPercent(freight) && matchesRfxUnit(freight, rfxLineItem.unit)) {
+    evaluated += freight.amount;
+  }
+  if (tax) {
+    evaluated += isPercent(tax) ? evaluated * (tax.amount / 100) : matchesRfxUnit(tax, rfxLineItem.unit) ? tax.amount : 0;
+  }
+  if (discount) {
+    evaluated -= isPercent(discount)
+      ? evaluated * (discount.amount / 100)
+      : matchesRfxUnit(discount, rfxLineItem.unit)
+        ? discount.amount
+        : 0;
+  }
+
+  return {
+    normalizedValue,
+    normalizedCurrency: BASE_CURRENCY,
+    normalizedUnit: rfxLineItem.unit,
+    evaluatedValue: Math.round(evaluated * 100) / 100,
+    fxRateUsed,
+    discount,
+    freight,
+    tax,
+    unitRecognized: true,
+  };
+}

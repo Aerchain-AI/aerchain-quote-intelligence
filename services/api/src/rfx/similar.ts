@@ -1,0 +1,97 @@
+import { prisma } from "../db.js";
+
+/**
+ * Finds past sourcing events resembling a buyer's new request.
+ *
+ * Deliberately deterministic — token overlap over the event name, category,
+ * description, original request and line-item names. No model call, so the
+ * "have we bought this before?" answer costs nothing, never rate-limits, and
+ * returns the same suggestions for the same input every time.
+ */
+
+export interface SimilarRfx {
+  id: string;
+  name: string;
+  category: string;
+  status: string;
+  currency: string;
+  createdAt: string;
+  requiredByDate: string;
+  buyerName: string | null;
+  lineItemCount: number;
+  /** 0-1. Only reported so the UI can order and threshold; not shown as a score. */
+  score: number;
+  /** The words that actually drove the match, so a suggestion is explainable. */
+  matchedOn: string[];
+  sampleLineItems: string[];
+}
+
+/** Words too common in procurement text to indicate similarity. */
+const STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with", "we", "our", "i", "need",
+  "want", "require", "please", "some", "any", "new", "get", "buy", "purchase", "procure", "sourcing",
+  "event", "rfx", "rfq", "items", "item", "line", "lines", "quote", "quotes", "vendor", "vendors",
+  "supplier", "suppliers", "is", "are", "be", "this", "that", "it", "at", "by", "from", "across",
+]);
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 2 && !STOPWORDS.has(t))
+    .map((t) => (t.endsWith("s") && t.length > 4 ? t.slice(0, -1) : t)); // crude singularisation
+}
+
+export async function findSimilarRfx(
+  request: string,
+  options: { excludeRfxId?: string; limit?: number; minScore?: number } = {},
+): Promise<SimilarRfx[]> {
+  const { excludeRfxId, limit = 4, minScore = 0.08 } = options;
+  const requestTokens = new Set(tokenize(request));
+  if (requestTokens.size === 0) return [];
+
+  const candidates = await prisma.rfx.findMany({
+    where: excludeRfxId ? { id: { not: excludeRfxId } } : undefined,
+    include: { buyer: true, lineItems: { orderBy: { id: "asc" } } },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const scored: SimilarRfx[] = [];
+  for (const rfx of candidates) {
+    const haystack = [
+      rfx.name,
+      rfx.category,
+      rfx.description,
+      rfx.sourceRequest ?? "",
+      ...rfx.lineItems.map((li) => `${li.name} ${li.specification}`),
+    ].join(" ");
+    const candidateTokens = new Set(tokenize(haystack));
+
+    const matchedOn = [...requestTokens].filter((t) => candidateTokens.has(t));
+    if (matchedOn.length === 0) continue;
+
+    // Overlap relative to the request, so a short ask isn't penalised against a
+    // long historical record.
+    const score = matchedOn.length / requestTokens.size;
+    if (score < minScore) continue;
+
+    scored.push({
+      id: rfx.id,
+      name: rfx.name,
+      category: rfx.category,
+      status: rfx.status,
+      currency: rfx.currency,
+      createdAt: rfx.createdAt.toISOString(),
+      requiredByDate: rfx.requiredByDate.toISOString(),
+      buyerName: rfx.buyer?.name ?? null,
+      lineItemCount: rfx.lineItems.length,
+      score: Math.round(score * 100) / 100,
+      matchedOn: matchedOn.slice(0, 6),
+      sampleLineItems: rfx.lineItems.slice(0, 4).map((li) => li.name),
+    });
+  }
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, limit);
+}

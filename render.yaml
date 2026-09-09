@@ -1,0 +1,18 @@
+# One-click deploy for Render. Docker keeps the build identical to a local
+# `docker build`, so what the interviewer opens is what you tested.
+services:
+  - type: web
+    name: aerchain-quote-intelligence
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      # Set this in the Render dashboard, not here. Comma-separated Gemini keys;
+      # the pool fails over to the next one when a key hits its daily quota.
+      # Leave it unset and every screen still works — the shipped database is
+      # already extracted. Only live upload needs a key.
+      - key: GEMINI_API_KEYS
+        sync: false
+      - key: DATABASE_URL
+        value: file:/app/services/api/prisma/dev.db

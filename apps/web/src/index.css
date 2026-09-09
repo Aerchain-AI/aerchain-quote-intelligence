@@ -1,0 +1,323 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Design tokens.
+ *
+ * Three decisions worth stating, because each replaced something generic:
+ *
+ * 1. ONE accent, and it has no chroma. The app was violet — the single most
+ *    common fingerprint of a generated interface — and violet was competing
+ *    with the status colours for the eye. The action colour is now ink, and
+ *    colour is reserved for meaning: green is a saving, amber is unverified,
+ *    rose is a failure, sky is something the copilot pointed at. If it is
+ *    coloured on this screen, it is telling you something.
+ *
+ * 2. One grey family, warm. Cool slate mixed with warm amber reads muddy.
+ *    Every neutral here is tinted the same direction, and shadows carry that
+ *    hue rather than being black at low opacity.
+ *
+ * 3. The status set was run through a colour-vision validator against this
+ *    surface, not chosen by eye. The one adjacent pair inside the deuteranopia
+ *    warning band (amber against green) only ever appears with an icon and a
+ *    word, so colour is never the sole encoding.
+ *
+ * Light only, deliberately. A half-converted dark theme is worse than none.
+ */
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* surfaces — warm neutral, never pure white on pure grey */
+    --canvas: #f7f6f4;
+    --surface: #ffffff;
+    --surface-sunken: #faf9f7;
+    --surface-hover: #f2f0ec;
+    --surface-inverse: #1c1b19;
+    --surface-inverse-hover: #2a2825;
+
+    /* hairlines */
+    --line: #e8e5e0;
+    --line-strong: #d6d2ca;
+
+    /* ink */
+    --ink: #1a1917;
+    --ink-secondary: #57534e;
+    --ink-muted: #a29d95;
+    --ink-inverse: #faf9f7;
+
+    /* the one accent — action, not decoration */
+    --accent: #1a1917;
+    --accent-hover: #35322d;
+    --accent-soft: #f0ede8;
+    --accent-line: #d6d2ca;
+
+    /* status — validated set; each ships with an icon and a word */
+    --good: #047857;
+    --good-soft: #ecfdf5;
+    --good-line: #a7f3d0;
+    --warning: #a16207;
+    --warning-soft: #fefbe8;
+    --warning-line: #fde68a;
+    --critical: #c2185b;
+    --critical-soft: #fdf2f8;
+    --critical-line: #fbcfe8;
+    --info: #0369a1;
+    --info-soft: #f0f8ff;
+    --info-line: #bae0fd;
+
+    /* Shadows tinted with the neutral hue. Pure black at low opacity reads
+       grey and dead against a warm ground. */
+    --shadow-raised: 0 1px 2px rgba(41, 37, 32, 0.05);
+    --shadow-lifted: 0 2px 4px rgba(41, 37, 32, 0.05), 0 6px 16px -6px rgba(41, 37, 32, 0.1);
+    --shadow-overlay: 0 24px 60px -16px rgba(28, 27, 25, 0.32), 0 0 0 1px rgba(28, 27, 25, 0.06);
+
+    /* motion */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+    --dur-fast: 130ms;
+    --dur: 190ms;
+    --dur-slow: 320ms;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-feature-settings: "ss03";
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Long-form copy should never orphan its last word. */
+  p,
+  li {
+    text-wrap: pretty;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  /* One focus treatment everywhere, so a button, a link and a clickable number
+     all give the keyboard user the same affordance. */
+  :focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+    border-radius: 5px;
+  }
+
+  /* Motion is decoration for anyone who has asked for less of it. */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 1ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* ---------------------------------------------------------- typography */
+
+  /* Every figure here is read as a number, compared against the number above
+     it, and defended in a meeting. Mono with tabular figures keeps digits in
+     the same column, so a difference is visible without reading. */
+  .cell-num,
+  .num,
+  .num-lg {
+    font-family: theme("fontFamily.mono");
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum", "zero";
+  }
+  .num {
+    letter-spacing: -0.005em;
+  }
+  .num-lg {
+    letter-spacing: -0.02em;
+  }
+
+  /* Display type: heavier, tighter, shorter leading. */
+  .display {
+    @apply font-semibold;
+    letter-spacing: -0.028em;
+    line-height: 1.08;
+  }
+
+  /* A section label. Quiet, spaced, never competing with its value. */
+  .eyebrow {
+    @apply text-[10.5px] font-medium uppercase;
+    letter-spacing: 0.09em;
+    color: var(--ink-muted);
+  }
+
+  /* Prose measure — roughly 65 characters. */
+  .measure {
+    max-width: 62ch;
+  }
+
+  /* ------------------------------------------------------------ surfaces */
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow-raised);
+  }
+
+  /* Faint grain over the dark shell. Flat vector dark reads like a slide
+     background; a little tooth gives it a surface. */
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ------------------------------------------------------- interactivity */
+
+  /* A number the buyer can open up. The dotted rule is the promise that a
+     derivation sits behind it — a footnote marker's job, without stealing the
+     emphasis the figure itself needs. */
+  .explainable {
+    @apply relative cursor-pointer rounded-[4px];
+    text-decoration: underline dotted;
+    text-decoration-color: var(--ink-muted);
+    text-underline-offset: 5px;
+    text-decoration-thickness: 1.5px;
+    transition:
+      background-color var(--dur) var(--ease-out),
+      box-shadow var(--dur) var(--ease-out),
+      text-decoration-color var(--dur) var(--ease-out);
+  }
+  .explainable:hover {
+    text-decoration-color: var(--ink);
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+
+  /* Everything clickable answers the pointer, and answers the press. */
+  .pressable {
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out);
+  }
+  .pressable:active:not(:disabled) {
+    transform: scale(0.975);
+  }
+
+  /* --------------------------------------------------------------- grid */
+
+  /* The comparison table is the product, so it gets the tightest treatment in
+     the app: hairline rules, a header that stays legible over scrolled rows,
+     and rows that respond to the pointer. */
+  .grid-table {
+    @apply w-full border-collapse text-[13px];
+  }
+  .grid-table thead th {
+    @apply sticky top-0 px-3 py-2 text-[10.5px] font-medium uppercase;
+    z-index: 20;
+    background: var(--surface-sunken);
+    color: var(--ink-muted);
+    letter-spacing: 0.07em;
+    box-shadow: inset 0 -1px 0 var(--line-strong);
+  }
+  .grid-table tbody td {
+    @apply px-3 py-1.5;
+    box-shadow: inset 0 -1px 0 var(--line);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .grid-table tbody tr:hover td {
+    background: var(--surface-hover);
+  }
+  .grid-table tfoot td {
+    @apply px-3 py-2.5 font-semibold;
+    background: var(--surface-sunken);
+    box-shadow: inset 0 1px 0 var(--line-strong);
+  }
+
+  /* ------------------------------------------------------------- loading */
+
+  /* Skeletons in the shape of the thing being loaded, rather than a spinner
+     that tells you nothing about what is coming. */
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface-hover) 25%, var(--surface-sunken) 50%, var(--surface-hover) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+    border-radius: 5px;
+  }
+
+  /* --------------------------------------------------------------- misc */
+
+  .thin-scroll::-webkit-scrollbar {
+    height: 10px;
+    width: 10px;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border: 3px solid var(--surface);
+    border-radius: 6px;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--ink-muted);
+  }
+  .thin-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Keyboard users land here first. */
+  .skip-link {
+    @apply sr-only;
+  }
+  .skip-link:focus {
+    @apply not-sr-only fixed left-4 top-4 rounded-md px-4 py-2 text-[13px] font-medium;
+    z-index: 60;
+    background: var(--surface-inverse);
+    color: var(--ink-inverse);
+  }
+}
+
+@layer utilities {
+  /* Staggered entry. Lists and tile rows cascade rather than all appearing at
+     once, which reads as the page assembling instead of blinking into place. */
+  .stagger > * {
+    animation: fade-up 380ms var(--ease-out) both;
+  }
+  .stagger > *:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  .stagger > *:nth-child(2) {
+    animation-delay: 45ms;
+  }
+  .stagger > *:nth-child(3) {
+    animation-delay: 90ms;
+  }
+  .stagger > *:nth-child(4) {
+    animation-delay: 135ms;
+  }
+  .stagger > *:nth-child(5) {
+    animation-delay: 180ms;
+  }
+  .stagger > *:nth-child(n + 6) {
+    animation-delay: 220ms;
+  }
+}

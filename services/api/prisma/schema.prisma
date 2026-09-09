@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A procurement buyer. No production auth in this prototype (PRD 34), but every
+/// RFx still records who raised it and when — that is audit trail, not login.
+model Buyer {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  team      String
+  createdAt DateTime @default(now())
+
+  rfxs Rfx[]
+}
+
+model Rfx {
+  id             String   @id @default(uuid())
+  name           String
+  category       String
+  requiredByDate DateTime
+  currency       String
+  description    String
+  /// draft | active | awarded — lets past events be offered as precedent.
+  status         String   @default("active")
+  /// The buyer's original free-text ask, kept so similar future asks can match on it.
+  sourceRequest  String?
+  /// The clarifying questions and answers that shaped this RFx, as JSON.
+  clarificationsJson String?
+  buyerId        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  /// When the RFx was issued to suppliers. Null while it is still a draft.
+  issuedAt  DateTime?
+
+  buyer       Buyer?     @relation(fields: [buyerId], references: [id])
+  lineItems   LineItem[]
+  vendors     Vendor[]
+  timeline    RfxEvent[]
+  invitations RfxInvitation[]
+
+  @@index([buyerId])
+  @@index([category])
+}
+
+/// Milestones on a sourcing event. Stored rather than derived at render time so
+/// the timeline is a record of what happened, not a story assembled on demand.
+model RfxEvent {
+  id        String   @id @default(uuid())
+  rfxId     String
+  /// created | issued | response_received | extraction_complete | shortlisted | awarded | note
+  type      String
+  title     String
+  detail    String?
+  actor     String?
+  occurredAt DateTime
+
+  rfx Rfx @relation(fields: [rfxId], references: [id], onDelete: Cascade)
+
+  @@index([rfxId])
+}
+
+model LineItem {
+  id            Int    @id // matches the fixed RFx item number, 1-30
+  rfxId         String
+  name          String
+  specification String
+  quantity      Int
+  unit          String
+
+  rfx    Rfx           @relation(fields: [rfxId], references: [id])
+  quotes VendorQuote[]
+
+  @@index([rfxId])
+}
+
+model Vendor {
+  id                 String   @id @default(uuid())
+  rfxId              String
+  name               String // "Vendor A".."Vendor E"
+  responseFormat     String // xlsx | pdf | docx | jpg | txt
+  filePath           String
+  status             String   @default("pending") // pending|processing|processed|review_required|failed
+  itemsFoundCount    Int?
+  itemsMissingCount  Int?
+  overallConfidence  Float?
+  processingMs       Int?
+  processedAt        DateTime?
+
+  rfx           Rfx                    @relation(fields: [rfxId], references: [id])
+  quotes        VendorQuote[]
+  exceptions    QuoteException[]
+  questionnaire QuestionnaireResponse[]
+
+  @@index([rfxId])
+}
+
+model VendorQuote {
+  id          String  @id @default(uuid())
+  vendorId    String
+  lineItemId  Int
+
+  sourceValue    Float?
+  sourceCurrency String?
+  sourceUnit     String?
+
+  normalizedValue    Float?
+  normalizedCurrency String
+  normalizedUnit     String
+
+  aiInterpretedValue    Float?
+  aiInterpretedCurrency String?
+  aiInterpretedUnit     String?
+
+  discountJson String? // JSON MoneyAdjustment | null
+  freightJson  String? // JSON MoneyAdjustment | null
+  taxJson      String? // JSON MoneyAdjustment | null
+
+  evaluatedValue Float?
+
+  confidence      Float?
+  confidenceLevel String? // high|medium|low
+  status          String // verified|flagged|not_quoted
+
+  sourceDocument String?
+  sourceLocation String?
+  sourceExcerpt  String?
+  fxRateJson     String? // JSON FxRateInfo | null
+  notes          String?
+
+  vendor   Vendor   @relation(fields: [vendorId], references: [id])
+  lineItem LineItem @relation(fields: [lineItemId], references: [id])
+
+  @@unique([vendorId, lineItemId])
+  @@index([vendorId])
+  @@index([lineItemId])
+}
+
+model QuoteException {
+  id         String  @id @default(uuid())
+  vendorId   String
+  lineItemId Int?
+  type       String
+  message    String
+  severity   String // info|warning|critical
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
+}
+
+model QuestionnaireResponse {
+  id           String  @id @default(uuid())
+  vendorId     String
+  questionId   Int
+  questionText String
+  answerText   String
+  passFail     Boolean?
+  confidence   Float?
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@unique([vendorId, questionId])
+  @@index([vendorId])
+}
+
+/// Cached copilot answers. The deterministic calculation is cheap and always
+/// re-run; only the LLM's intent-parse and prose explanation are cached, keyed to
+/// a dataVersion derived from vendor processing timestamps so any re-extraction
+/// invalidates it automatically.
+model CopilotAnswerCache {
+  id           String   @id @default(uuid())
+  rfxId        String
+  dataVersion  String
+  questionKey  String
+  question     String
+  payloadJson  String
+  createdAt    DateTime @default(now())
+
+  @@unique([rfxId, dataVersion, questionKey])
+  @@index([rfxId])
+}
+
+
+/// A supplier the business can invite to quote — the master registry, distinct
+/// from `Vendor`, which is one supplier's response to one event.
+///
+/// Performance figures are the buyer's reason to pick one supplier over another,
+/// so they are stored per supplier and shown on the invite screen. A supplier
+/// added ad-hoc by email has no history yet, and says so rather than showing
+/// zeros that would read as bad performance.
+model Supplier {
+  id                String   @id @default(uuid())
+  name              String
+  email             String   @unique
+  category          String
+  /// Free-text note on what they have supplied before.
+  pastWork          String?
+
+  eventsInvited     Int      @default(0)
+  eventsQuoted      Int      @default(0)
+  eventsAwarded     Int      @default(0)
+  avgResponseDays   Float?
+  onTimeDeliveryPct Float?
+  /// 0-1. Aggregated quality/compliance record.
+  qualityScore      Float?
+  lastEngagedAt     DateTime?
+  /// True when added during an invite with no prior history.
+  isNew             Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+  invitations RfxInvitation[]
+
+  @@index([category])
+}
+
+/// One supplier invited to one RFx, with the exact email that was sent.
+model RfxInvitation {
+  id           String   @id @default(uuid())
+  rfxId        String
+  supplierId   String
+  email        String
+  emailSubject String
+  emailBody    String
+  status       String   @default("sent") // sent | responded | declined
+  sentAt       DateTime @default(now())
+
+  rfx      Rfx      @relation(fields: [rfxId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@unique([rfxId, supplierId])
+  @@index([rfxId])
+}
