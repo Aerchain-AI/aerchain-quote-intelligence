@@ -163,7 +163,7 @@ export default function EventWorkspace() {
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<EventOverview rfxId={rfxId} onSaved={load} />} />
           <Route path="responses" element={<ResponsesScreen rfxId={rfxId} />} />
-          <Route path="vendors/*" element={<VendorsScreen rfxId={detail.id} />} />
+          <Route path="vendors/*" element={<VendorsScreen rfxId={detail.id} onVendorsChanged={load} />} />
           {hasResponses && (
             <>
               <Route path="comparison" element={<ComparisonScreen rfxId={detail.id} />} />

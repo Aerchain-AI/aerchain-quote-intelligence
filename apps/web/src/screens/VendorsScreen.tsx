@@ -17,7 +17,15 @@ const FORMAT_LABELS: Record<string, string> = {
 /** PRD §13 — vendor response status. Five different formats, one status view. */
 const CHECK_EL = <Icon name="check" size={13} />;
 
-export default function VendorsScreen({ rfxId }: { rfxId: string }) {
+export default function VendorsScreen({
+  rfxId,
+  onVendorsChanged,
+}: {
+  rfxId: string;
+  /** Tells the workspace its response count moved, so the tabs that depend on
+   * having responses unlock without a page reload. */
+  onVendorsChanged?: () => void;
+}) {
   const [vendors, setVendors] = useState<VendorSummary[] | null>(null);
   const [exceptions, setExceptions] = useState<ExceptionCentre | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +59,10 @@ export default function VendorsScreen({ rfxId }: { rfxId: string }) {
       .then(([v, e]) => {
         setVendors(v);
         setExceptions(e);
+        // The workspace gates Comparison, Award and Accuracy on whether any
+        // response exists, and it read that from a detail it fetched once on
+        // mount. Uploading a quote left those tabs locked until a hard reload.
+        onVendorsChanged?.();
       })
       .catch((err) => setError(err.message));
   };
@@ -62,7 +74,12 @@ export default function VendorsScreen({ rfxId }: { rfxId: string }) {
       const newVendor = await api.addVendor(rfxId, payload);
       // 2. Add it to the top of the list
       setVendors((prev) => (prev ? [newVendor, ...prev] : [newVendor]));
-      // 3. Immediately trigger processing
+      // 3. The response now exists, so tell the workspace before extraction is
+      //    attempted. A quotation that the model could not read is still a
+      //    quotation, and gating the Comparison tab on the model succeeding
+      //    meant an upstream outage locked the buyer out of their own data.
+      onVendorsChanged?.();
+      // 4. Then extract it.
       await reprocess(newVendor.id);
     } catch (err) {
       setError((err as Error).message);
@@ -73,11 +90,14 @@ export default function VendorsScreen({ rfxId }: { rfxId: string }) {
     setProcessing(vendorId);
     try {
       await api.processVendor(rfxId, vendorId);
-      load();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setProcessing(null);
+      // Reload either way. A failed extraction restores the vendor's previous
+      // status server-side, and the buyer needs to see that rather than a row
+      // stuck on "processing".
+      load();
     }
   };
 
