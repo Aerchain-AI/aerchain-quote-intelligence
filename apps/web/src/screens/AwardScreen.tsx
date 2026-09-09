@@ -67,7 +67,20 @@ export default function AwardScreen({ rfxId }: { rfxId: string }) {
 
       <Card>
         <div className="border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
-          <div className="eyebrow">Recommended strategy</div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="eyebrow">Recommended strategy</div>
+            {/* The document that goes to whoever signs. It carries the caveats in
+                their own section rather than dropping them on the way out. */}
+            <a
+              href={api.awardMemoUrl(rfxId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="pressable inline-flex items-center gap-1.5 rounded-lg border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 py-[5px] text-[12px] font-medium text-[var(--ink-secondary)] hover:border-[var(--ink-muted)] hover:text-[var(--ink)]"
+            >
+              <Icon name="document" size={13} />
+              Award memo
+            </a>
+          </div>
           <h2 className="display mt-1.5 text-[26px]" style={{ color: strategyTone }}>
             {STRATEGY_LABELS[data.strategy]}
           </h2>

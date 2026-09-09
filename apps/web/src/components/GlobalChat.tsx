@@ -1,4 +1,5 @@
 import React, { useRef } from "react";
+import AnalysisChart from "./AnalysisChart";
 import Icon, { type IconName } from "./Icon";
 import { useGlobalChat } from "../lib/ChatContext";
 
@@ -83,7 +84,7 @@ export default function GlobalChat() {
           {/* Answers for the event in scope. Scoped to this event only — moving
               to another event starts a fresh thread. */}
           {thread.length > 0 && (
-            <div className="thin-scroll animate-fade-up mb-2 max-h-64 space-y-2 overflow-y-auto rounded-lg p-3"
+            <div className="thin-scroll animate-fade-up mb-2 max-h-[28rem] space-y-4 overflow-y-auto rounded-lg p-3.5"
               style={{ border: "1px solid var(--line)", background: "var(--surface-sunken)" }}>
               {thread.map((turn) => (
                 <div key={turn.id}>
@@ -97,6 +98,11 @@ export default function GlobalChat() {
                       <p className="mt-0.5 whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--ink-secondary)]">
                         {turn.answer}
                       </p>
+                      {turn.full && (
+                        <div className="mt-3 empty:hidden">
+                          <AnalysisChart answer={turn.full} />
+                        </div>
+                      )}
                       {turn.caveats.length > 0 && (
                         <ul className="mt-1 space-y-0.5">
                           {turn.caveats.map((c, i) => (

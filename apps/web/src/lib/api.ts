@@ -334,6 +334,31 @@ export interface ImpactReport {
   generatedAt: string;
 }
 
+export interface AccuracyReport {
+  overallPriceAccuracy: number | null;
+  totalPricedFields: number;
+  totalCorrect: number;
+  omissionDetectionAccuracy: number | null;
+  perVendor: Array<{
+    vendorName: string;
+    pricedFieldsExpected: number;
+    pricedFieldsCorrect: number;
+    priceAccuracy: number | null;
+    omissionsExpected: number;
+    omissionsCorrectlyDetected: number;
+    falselyReportedMissing: number;
+  }>;
+  mismatches: Array<{
+    vendorName: string;
+    lineItemId: number;
+    expected: number | null;
+    extracted: number | null;
+    correct: boolean;
+    note: string | null;
+  }>;
+  basis: string;
+}
+
 export interface RfxDraft {
   name: string;
   category: string;
@@ -518,6 +543,9 @@ export const api = {
   askCopilot: (rfxId: string, question: string) => post<CopilotAnswer>(`/rfx/${rfxId}/copilot`, { question }),
   getAward: (rfxId: string) => get<AwardRecommendation>(`/rfx/${rfxId}/award`),
   getMetrics: (rfxId: string) => get<ImpactReport>(`/rfx/${rfxId}/metrics`),
+  getAccuracy: (rfxId: string) => get<AccuracyReport>(`/rfx/${rfxId}/accuracy`),
+  comparisonExportUrl: (rfxId: string) => `${BASE}/rfx/${rfxId}/export/comparison.xlsx`,
+  awardMemoUrl: (rfxId: string) => `${BASE}/rfx/${rfxId}/export/award-memo.pdf`,
   getPortfolioMetrics: () => get<PortfolioMetrics>("/portfolio/metrics"),
   getInboxStatus: () => get<InboxStatus>("/inbox/status"),
   syncInbox: () => post<SyncSummary>("/inbox/sync", {}),

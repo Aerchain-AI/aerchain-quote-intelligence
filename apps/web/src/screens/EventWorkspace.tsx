@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Icon from "../components/Icon";
 import ResponsesScreen from "./ResponsesScreen";
+import TrustScreen from "./TrustScreen";
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { ErrorState, Spinner } from "../components/ui";
 import { api, type RfxDetail } from "../lib/api";
@@ -32,6 +33,7 @@ const TABS: TabDef[] = [
   { to: "vendors", label: "Vendor Responses", step: "3", needsResponses: true },
   { to: "comparison", label: "Comparison", step: "4", needsResponses: true },
   { to: "award", label: "Award Recommendation", step: "5", needsResponses: true },
+  { to: "trust", label: "Accuracy", step: "6", needsResponses: true },
 ];
 
 export default function EventWorkspace() {
@@ -159,6 +161,7 @@ export default function EventWorkspace() {
               <Route path="vendors/*" element={<VendorsScreen rfxId={detail.id} />} />
               <Route path="comparison" element={<ComparisonScreen rfxId={detail.id} />} />
               <Route path="award" element={<AwardScreen rfxId={detail.id} />} />
+              <Route path="trust" element={<TrustScreen rfxId={detail.id} />} />
             </>
           )}
           {/* Any workflow route on an event without responses falls back to overview. */}

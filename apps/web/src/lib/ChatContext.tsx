@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { api, type CopilotAnswer } from "./api";
 import { useLocation, useNavigate } from "react-router-dom";
 
 export interface AttachedFile {
@@ -39,6 +39,9 @@ export interface ChatTurn {
   caveats: string[];
   supported: boolean;
   error: string | null;
+  /** The whole copilot response, so the thread can draw the analysis as well as
+   * state it. Null until the answer lands. */
+  full: CopilotAnswer | null;
 }
 
 interface ChatContextValue {
@@ -198,14 +201,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const scopedEventId = activeContext.sourcingEventId;
       if (scopedEventId && scopedEventId !== "new" && !isOnBuilder) {
         const id = `${Date.now()}`;
-        setThread((prev) => [...prev, { id, question: text, answer: null, caveats: [], supported: true, error: null }]);
+        setThread((prev) => [...prev, { id, question: text, answer: null, caveats: [], supported: true, error: null, full: null }]);
         setThreadBusy(true);
         try {
           const answer = await api.askCopilot(scopedEventId, text);
           setThread((prev) =>
             prev.map((t) =>
               t.id === id
-                ? { ...t, answer: answer.answer, caveats: answer.caveats, supported: answer.supported }
+                ? { ...t, answer: answer.answer, caveats: answer.caveats, supported: answer.supported, full: answer }
                 : t,
             ),
           );

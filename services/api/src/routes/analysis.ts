@@ -1,7 +1,9 @@
 import { Router } from "express";
+import { prisma } from "../db.js";
 import { buildAwardRecommendation } from "../award/recommend.js";
 import { loadComparisonDataset } from "../calc/dataset.js";
 import { EXPLAINABLE_FIGURES, explainFigure } from "../calc/derivation.js";
+import { buildAwardMemoPdf, buildComparisonWorkbook, exportFileNames } from "../export/exports.js";
 import { summarizeExceptions } from "../calc/engine.js";
 import { PORTFOLIO_FIGURES, buildPortfolioMetrics, explainPortfolioFigure } from "../calc/portfolio.js";
 import { answerQuestion } from "../copilot/answer.js";
@@ -28,6 +30,36 @@ analysisRouter.post("/rfx/:id/copilot", async (req, res) => {
 analysisRouter.get("/rfx/:id/award", async (req, res) => {
   const dataset = await loadComparisonDataset(req.params.id);
   res.json(buildAwardRecommendation(dataset));
+});
+
+/**
+ * Taking the analysis out of the app.
+ *
+ * Generated on demand from the stored event, so an export can never drift from
+ * what the screen shows, and both carry the same caveats.
+ */
+analysisRouter.get("/rfx/:id/export/comparison.xlsx", async (req, res) => {
+  try {
+    const rfx = await prisma.rfx.findUniqueOrThrow({ where: { id: req.params.id }, select: { name: true } });
+    const book = await buildComparisonWorkbook(req.params.id);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${exportFileNames(rfx.name).xlsx}"`);
+    res.send(book);
+  } catch (err) {
+    res.status(404).json({ error: "Could not build the comparison workbook.", detail: (err as Error).message });
+  }
+});
+
+analysisRouter.get("/rfx/:id/export/award-memo.pdf", async (req, res) => {
+  try {
+    const rfx = await prisma.rfx.findUniqueOrThrow({ where: { id: req.params.id }, select: { name: true } });
+    const pdf = await buildAwardMemoPdf(req.params.id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${exportFileNames(rfx.name).pdf}"`);
+    res.send(pdf);
+  } catch (err) {
+    res.status(404).json({ error: "Could not build the award memo.", detail: (err as Error).message });
+  }
 });
 
 /**

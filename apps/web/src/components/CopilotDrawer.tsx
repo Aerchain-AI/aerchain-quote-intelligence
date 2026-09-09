@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState } from "react";
+import AnalysisChart from "./AnalysisChart";
 import Icon from "./Icon";
 import { api, type CopilotAnswer } from "../lib/api";
 import { Button, SeverityBadge, Spinner } from "./ui";
@@ -252,8 +253,14 @@ function StructuredAnswer({
 
       {/* Section 1: Answer */}
       <div className="px-2.5 py-2.5 border-b border-[var(--line)]">
-        <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--info)] mb-0.5">Answer</p>
-        <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-[var(--ink)]">{answer.answer}</p>
+        <p className="eyebrow mb-1">Answer</p>
+        <p className="whitespace-pre-wrap text-[11.5px] leading-relaxed text-[var(--ink)]">{answer.answer}</p>
+      </div>
+
+      {/* The same numbers, drawn. The chart form is chosen by a fixed switch on
+          the analysis type, not by the model. */}
+      <div className="border-b border-[var(--line)] px-2.5 py-3 empty:hidden">
+        <AnalysisChart answer={answer} />
       </div>
 
       {/* Section 2: Calculation */}

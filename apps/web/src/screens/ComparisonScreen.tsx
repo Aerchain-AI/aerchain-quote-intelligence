@@ -102,6 +102,16 @@ export default function ComparisonScreen({ rfxId }: { rfxId: string }) {
             />
             Show only exceptions
           </label>
+          {/* A download, not a screenshot of the grid: the workbook carries the
+              source values, the exceptions and the basis on their own sheets. */}
+          <a
+            href={api.comparisonExportUrl(rfxId)}
+            className="pressable inline-flex items-center gap-1.5 rounded-lg border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 py-[5px] text-[12px] font-medium text-[var(--ink-secondary)] hover:border-[var(--ink-muted)] hover:text-[var(--ink)]"
+            title="Download the comparison with source values, exceptions and basis"
+          >
+            <Icon name="spreadsheet" size={13} />
+            Export
+          </a>
           <Button onClick={() => setDrawerOpen(true)} className="!bg-[var(--accent)] !px-3 hover:!bg-[var(--accent-hover)]">
             <span className="mr-1 inline-block align-[-2px]"><Icon name="spark" size={13} /></span> Ask AI
           </Button>
