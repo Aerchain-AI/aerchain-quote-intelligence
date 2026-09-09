@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useFigureExplainer } from "../components/ExplainFigure";
 import Icon from "../components/Icon";
+import ProcurementHistory from "../components/ProcurementHistory";
 import { EmptyState, ErrorState, InlineError, Skeleton, StatusPill } from "../components/ui";
 import {
   api,
@@ -386,6 +387,10 @@ export default function EventsScreen() {
             </div>
           </>
         )}
+
+        {/* Kept below the register and visibly separate: these closed before the
+            system existed and carry no derivation. */}
+        {loaded && <ProcurementHistory />}
 
         {panel}
       </main>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useFigureExplainer } from "../components/ExplainFigure";
 import Icon from "../components/Icon";
+import ProcurementHistory from "../components/ProcurementHistory";
 import { api, formatInr, type PortfolioMetrics, type Rfx } from "../lib/api";
 
 export default function DashboardScreen() {
@@ -226,6 +227,8 @@ export default function DashboardScreen() {
           </div>
         )}
       </div>
+
+      <ProcurementHistory compact />
 
       {panel}
     </div>

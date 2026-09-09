@@ -10,6 +10,7 @@ import { comparisonRouter } from "./routes/comparison.js";
 import { healthRouter } from "./routes/health.js";
 import { inboxRouter } from "./routes/inbox.js";
 import { issueRouter } from "./routes/issue.js";
+import { registryRouter } from "./routes/registry.js";
 import { rfxRouter } from "./routes/rfx.js";
 import { vendorsRouter } from "./routes/vendors.js";
 
@@ -34,6 +35,7 @@ app.use("/api", comparisonRouter);
 app.use("/api", analysisRouter);
 app.use("/api", issueRouter);
 app.use("/api", inboxRouter);
+app.use("/api", registryRouter);
 
 /**
  * In production the API also serves the built front end, so the whole prototype

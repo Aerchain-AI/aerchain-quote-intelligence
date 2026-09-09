@@ -359,6 +359,63 @@ export interface AccuracyReport {
   basis: string;
 }
 
+export interface SupplierRecord {
+  id: string;
+  name: string;
+  email: string;
+  category: string;
+  city: string | null;
+  gstin: string | null;
+  verificationStatus: string;
+  verificationNote: string | null;
+  paymentTerms: string | null;
+  pastWork: string | null;
+  onTimeDeliveryPct: number | null;
+  qualityScore: number | null;
+  historyCount: number;
+  awardedCount: number;
+  qualityIncidents: number;
+  recordedAwardValue: number;
+  history: Array<{
+    externalId: string;
+    title: string;
+    category: string;
+    completedAt: string;
+    result: string;
+    performance: string | null;
+    qualityIncidents: number;
+    awardValueInr: number | null;
+  }>;
+  currentInvitations: Array<{ rfxId: string; rfxName: string; status: string; respondedAt: string | null }>;
+}
+
+export interface ProcurementHistory {
+  basis: string;
+  recordedValue: number;
+  recordedSavings: number;
+  records: Array<{
+    id: string;
+    externalId: string;
+    title: string;
+    category: string;
+    completedAt: string;
+    awardedVendorName: string;
+    awardedSupplierId: string | null;
+    awardValueInr: number;
+    baselineInr: number | null;
+    savingsInr: number | null;
+    savingsPct: number | null;
+    source: string;
+    participants: Array<{
+      supplierId: string;
+      name: string;
+      result: string;
+      performance: string | null;
+      qualityIncidents: number;
+    }>;
+  }>;
+}
+
 export interface RfxDraft {
   name: string;
   category: string;
@@ -559,6 +616,8 @@ export const api = {
   explainPortfolio: (figure: PortfolioFigure) => get<Derivation>(`/portfolio/explain/${figure}`),
   explainFigure: (rfxId: string, figure: ExplainableFigure, vendorId?: string) =>
     get<Derivation>(`/rfx/${rfxId}/explain/${figure}${vendorId ? `?vendorId=${encodeURIComponent(vendorId)}` : ""}`),
+  listSuppliers: () => get<SupplierRecord[]>("/suppliers"),
+  getProcurementHistory: () => get<ProcurementHistory>("/procurement-history"),
   listAllVendors: () =>
     get<Array<{ id: string; name: string; format: string; qualityScore: string; status: string; categories: string }>>("/vendors"),
   listApprovals: () =>
