@@ -87,7 +87,7 @@ npm run demo:snapshot               # freezes the result as the shipped demo dat
 ## Verifying it actually works
 
 ```bash
-npm test              # 70 unit tests — normalization, validation, calc engine, derivations, award logic
+npm test              # 85 unit tests — normalization, validation, calc engine, derivations, award logic, inbox matching
 npm run break-tests    # 9 trust guarantees, checked against the live extracted data
 ```
 
@@ -146,6 +146,44 @@ includes a data version derived from vendor processing state, so re-extracting a
 invalidates it. A cached answer was genuinely computed the first time — caching just means a live
 demo doesn't hang on an API round-trip.
 
+
+## Supplier replies come back by email
+
+Issuing an RFx records who it went to. Reading the answers closes the loop: a
+sync pulls messages from the inbox, works out which event each one answers, and
+files any attached quotation against the right supplier.
+
+The matcher is deterministic and tries four signals in descending order of
+certainty:
+
+| Signal | Confidence | What it is |
+|---|---|---|
+| Reply token in the To address | exact | `you+rfx-1a2b3c4d@…` — survives the supplier replying from a colleague's mailbox |
+| `In-Reply-To` header | exact | a threaded reply to the invitation we sent |
+| Sender is an invited supplier | high | and invited to exactly one open event |
+| Subject names the event | medium | held for a buyer to confirm, never filed on its own |
+
+Anything else goes to an unmatched tray. That refusal is the point: filing a
+quotation against the wrong event produces a confident, wrong comparison that
+nothing downstream can detect — the same failure mode as valuing an unquoted
+line at zero. A supplier bidding on two of your events who replies with nothing
+but "our quotation attached" is genuinely ambiguous, and the system says so
+rather than picking.
+
+**Two transports, one interface.** With `IMAP_HOST`/`IMAP_USER`/`IMAP_PASSWORD`
+set it reads a real mailbox, read-only — nothing is marked, moved or deleted,
+and de-duplication uses the message's own id rather than a read flag. With them
+unset it reads `data/inbound-samples/*.eml`, which are real MIME messages with
+real attachments parsed by the same library. Everything after the fetch is
+identical, so the demo needs no mailbox and cannot fail on a network call.
+
+```bash
+npm run generate:inbound-samples    # authors the samples from the live invitation list
+npm run inbox:reset                  # back to "no mail read yet"
+```
+
+Then open an issued event and press **Check for replies** on the Supplier
+Replies tab.
 
 ## Deploying
 

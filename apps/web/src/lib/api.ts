@@ -414,6 +414,73 @@ export type ExplainableFigure =
   | "vendor_total"
   | "allocation";
 
+// ----------------------------------------------------------------- inbox
+
+export interface InboxStatus {
+  transport: "imap" | "sample";
+  description: string;
+  connected: boolean;
+  inboxAddress: string | null;
+}
+
+export interface SyncSummary {
+  transport: string;
+  fetched: number;
+  duplicates: number;
+  matched: number;
+  unmatched: number;
+  attached: number;
+  messages: Array<{ id: string; from: string; subject: string; matchedTo: string | null; reason: string }>;
+}
+
+export interface InvitedResponse {
+  supplierId: string;
+  name: string;
+  email: string;
+  invitedAt: string;
+  status: string;
+  respondedAt: string | null;
+  responseSubject: string | null;
+  snippet: string | null;
+  attachments: string[];
+  vendorId: string | null;
+  vendorStatus: string | null;
+  matchedBy: string | null;
+}
+
+export interface UninvitedResponse {
+  id: string;
+  from: string;
+  fromName: string | null;
+  subject: string;
+  receivedAt: string;
+  snippet: string;
+  attachments: string[];
+  matchedBy: string | null;
+  matchConfidence: string | null;
+  vendorId: string | null;
+  note: string | null;
+}
+
+export interface ResponseLedger {
+  replyAddress: string | null;
+  inboxConnected: boolean;
+  transport: string;
+  invited: InvitedResponse[];
+  uninvited: UninvitedResponse[];
+}
+
+export interface UnmatchedMessage {
+  id: string;
+  from: string;
+  fromName: string | null;
+  subject: string;
+  receivedAt: string;
+  snippet: string;
+  attachments: string[];
+  note: string | null;
+}
+
 // ------------------------------------------------------------------- calls
 
 export const api = {
@@ -452,6 +519,15 @@ export const api = {
   getAward: (rfxId: string) => get<AwardRecommendation>(`/rfx/${rfxId}/award`),
   getMetrics: (rfxId: string) => get<ImpactReport>(`/rfx/${rfxId}/metrics`),
   getPortfolioMetrics: () => get<PortfolioMetrics>("/portfolio/metrics"),
+  getInboxStatus: () => get<InboxStatus>("/inbox/status"),
+  syncInbox: () => post<SyncSummary>("/inbox/sync", {}),
+  getResponses: (rfxId: string) => get<ResponseLedger>(`/rfx/${rfxId}/responses`),
+  getUnmatchedMail: () => get<UnmatchedMessage[]>("/inbox/unmatched"),
+  assignInboundMessage: (messageId: string, rfxId: string, supplierId?: string) =>
+    post<{ messageId: string; rfxId: string; vendorId: string | null }>(`/inbox/messages/${messageId}/assign`, {
+      rfxId,
+      supplierId,
+    }),
   explainPortfolio: (figure: PortfolioFigure) => get<Derivation>(`/portfolio/explain/${figure}`),
   explainFigure: (rfxId: string, figure: ExplainableFigure, vendorId?: string) =>
     get<Derivation>(`/rfx/${rfxId}/explain/${figure}${vendorId ? `?vendorId=${encodeURIComponent(vendorId)}` : ""}`),

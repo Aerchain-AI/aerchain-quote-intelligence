@@ -102,6 +102,38 @@ computes it, and the model only phrases the result it was handed.
 Good follow-ups: *"What is the cheapest vendor overall?"*, *"What happens if Vendor B gives another
 5% discount?"*
 
+## 5b — Replies arriving by email (90s)
+
+Open the **Hyderabad Warehouses** event → **Supplier Replies**.
+
+> "Issuing the RFx is half of it. The other half is that the answers come back as
+> email, to a shared inbox, from whoever in the supplier's office happened to
+> pick it up."
+
+Press **Check for replies**. Five messages are read and filed. Walk the table:
+
+- Two suppliers replied with a quotation attached, and those attachments are
+  already vendor responses waiting to be extracted. One was filed on a reply
+  token, one on the sender address — the column says which.
+- One replied with a *question* about freight and no attachment. Marked
+  responded, but explicitly not a quotation. Those are different things.
+- One reply came from a supplier who was never invited: the RFx was forwarded.
+  It is matched on the subject line only, so it is held with a note saying to
+  confirm before relying on it.
+- One could not be placed at all and sits in the unplaced tray, with a sentence
+  explaining why and a button to file it by hand.
+
+> "It never guesses which event a reply belongs to. A quotation filed against the
+> wrong event is a confident, wrong comparison that nothing downstream can catch."
+
+Running the sync twice is a no-op — everything comes back as already seen.
+
+**The demo reads sample `.eml` files, not a live mailbox.** Say so. The IMAP
+adapter is in the repo and the matching, filing and de-duplication are the same
+code; only the fetch differs. That is a stronger answer than pretending.
+
+---
+
 ## 6 — Optional: live extraction (90s, needs an API key)
 
 Only do this if the deployed instance has `GEMINI_API_KEYS` set and you have quota left today.
@@ -132,5 +164,5 @@ Because the arithmetic has to be reproducible and auditable. A model asked to to
 items will usually be right and occasionally be confidently wrong, and there is no way to tell which
 from the output. Splitting the work means the model does what it is good at — reading a photographed
 invoice, interpreting a question — and the parts a buyer signs their name to are computed by code
-you can test. There are 70 unit tests over that code, plus nine trust guarantees checked against the
+you can test. There are 85 unit tests over that code, plus nine trust guarantees checked against the
 live extracted data (`npm run break-tests`).

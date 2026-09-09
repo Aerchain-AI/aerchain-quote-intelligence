@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Icon from "../components/Icon";
+import ResponsesScreen from "./ResponsesScreen";
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { ErrorState, Spinner } from "../components/ui";
 import { api, type RfxDetail } from "../lib/api";
@@ -27,9 +28,10 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { to: "overview", label: "Overview", step: "1" },
-  { to: "vendors", label: "Vendor Responses", step: "2", needsResponses: true },
-  { to: "comparison", label: "Comparison", step: "3", needsResponses: true },
-  { to: "award", label: "Award Recommendation", step: "4", needsResponses: true },
+  { to: "responses", label: "Supplier Replies", step: "2" },
+  { to: "vendors", label: "Vendor Responses", step: "3", needsResponses: true },
+  { to: "comparison", label: "Comparison", step: "4", needsResponses: true },
+  { to: "award", label: "Award Recommendation", step: "5", needsResponses: true },
 ];
 
 export default function EventWorkspace() {
@@ -151,6 +153,7 @@ export default function EventWorkspace() {
         <Routes>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<EventOverview rfxId={rfxId} onSaved={load} />} />
+          <Route path="responses" element={<ResponsesScreen rfxId={rfxId} />} />
           {hasResponses && (
             <>
               <Route path="vendors/*" element={<VendorsScreen rfxId={detail.id} />} />

@@ -8,6 +8,7 @@ import { REPO_ROOT } from "./paths.js";
 import { analysisRouter } from "./routes/analysis.js";
 import { comparisonRouter } from "./routes/comparison.js";
 import { healthRouter } from "./routes/health.js";
+import { inboxRouter } from "./routes/inbox.js";
 import { issueRouter } from "./routes/issue.js";
 import { rfxRouter } from "./routes/rfx.js";
 import { vendorsRouter } from "./routes/vendors.js";
@@ -29,6 +30,7 @@ app.use("/api", vendorsRouter);
 app.use("/api", comparisonRouter);
 app.use("/api", analysisRouter);
 app.use("/api", issueRouter);
+app.use("/api", inboxRouter);
 
 /**
  * In production the API also serves the built front end, so the whole prototype
