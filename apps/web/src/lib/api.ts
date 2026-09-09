@@ -559,6 +559,10 @@ export const api = {
   explainPortfolio: (figure: PortfolioFigure) => get<Derivation>(`/portfolio/explain/${figure}`),
   explainFigure: (rfxId: string, figure: ExplainableFigure, vendorId?: string) =>
     get<Derivation>(`/rfx/${rfxId}/explain/${figure}${vendorId ? `?vendorId=${encodeURIComponent(vendorId)}` : ""}`),
+  listAllVendors: () =>
+    get<Array<{ id: string; name: string; format: string; qualityScore: string; status: string; categories: string }>>("/vendors"),
+  listApprovals: () =>
+    get<Array<{ id: string; prx: string; buyer: string; value: string; vendor: string; status: string; date: string }>>("/approvals"),
 };
 
 // ------------------------------------------------------------- formatting

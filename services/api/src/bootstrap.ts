@@ -22,18 +22,19 @@ import { API_ROOT } from "./paths.js";
 const WORKING_DB = path.join(API_ROOT, "prisma", "dev.db");
 const DEMO_SNAPSHOT = path.join(API_ROOT, "prisma", "demo.db");
 
-export function bootstrapDatabase(): void {
+import { runSeed } from "./seed.js";
+
+export async function bootstrapDatabase(): Promise<void> {
   if (fs.existsSync(WORKING_DB) && fs.statSync(WORKING_DB).size > 0) {
     return;
   }
-  if (!fs.existsSync(DEMO_SNAPSHOT)) {
-    console.warn(
-      "[bootstrap] No database and no demo snapshot at prisma/demo.db.\n" +
-        "            Run: npm run seed  (then npm run pipeline:demo to populate extractions)",
-    );
+  if (fs.existsSync(DEMO_SNAPSHOT)) {
+    fs.copyFileSync(DEMO_SNAPSHOT, WORKING_DB);
+    const mb = (fs.statSync(WORKING_DB).size / 1024 / 1024).toFixed(2);
+    console.log(`[bootstrap] Restored the pre-processed demo database (${mb} MB).`);
     return;
   }
-  fs.copyFileSync(DEMO_SNAPSHOT, WORKING_DB);
-  const mb = (fs.statSync(WORKING_DB).size / 1024 / 1024).toFixed(2);
-  console.log(`[bootstrap] Restored the pre-processed demo database (${mb} MB).`);
+
+  console.log("[bootstrap] No demo snapshot found. Running initial seed...");
+  await runSeed().catch((err) => console.error("[bootstrap] Auto-seed failed:", err));
 }

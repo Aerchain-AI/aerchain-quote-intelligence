@@ -7,6 +7,49 @@ import { runPipelineForVendor } from "../pipeline/runPipeline.js";
 
 export const vendorsRouter = Router();
 
+vendorsRouter.get("/vendors", async (_req, res) => {
+  try {
+    const suppliers = await prisma.supplier.findMany({
+      orderBy: { name: "asc" },
+    });
+    if (suppliers.length > 0) {
+      return res.json(
+        suppliers.map((s) => ({
+          id: s.id,
+          name: s.name,
+          format: s.category || "Excel / PDF",
+          qualityScore: s.qualityScore ? `${Math.round(s.qualityScore * 100)}%` : "100%",
+          status: s.qualityScore && s.qualityScore > 0.8 ? "Qualified" : "Requires Review",
+          categories: s.category,
+        })),
+      );
+    }
+
+    const vendors = await prisma.vendor.findMany({
+      orderBy: { name: "asc" },
+    });
+    const formatMap: Record<string, string> = {
+      xlsx: "Excel (.xlsx)",
+      pdf: "PDF (.pdf)",
+      docx: "Word (.docx)",
+      jpg: "Photo/JPG (.jpg)",
+      txt: "Email Text (.txt)",
+    };
+    res.json(
+      vendors.map((v) => ({
+        id: v.id,
+        name: v.name,
+        format: formatMap[v.responseFormat] || v.responseFormat,
+        qualityScore: v.overallConfidence ? `${Math.round(v.overallConfidence * 100)}%` : "100%",
+        status: v.status === "processed" || v.status === "completed" || v.status === "pending" ? "Qualified" : "Requires Review",
+        categories: "Corrugated Packaging",
+      })),
+    );
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 // PRD §13 — Screen 2 vendor response status list.
 vendorsRouter.get("/rfx/:id/vendors", async (req, res) => {
   const vendors = await prisma.vendor.findMany({

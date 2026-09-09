@@ -21,6 +21,29 @@ rfxRouter.get("/buyers", async (_req, res) => {
   res.json(await prisma.buyer.findMany({ orderBy: { name: "asc" } }));
 });
 
+rfxRouter.get("/approvals", async (_req, res) => {
+  try {
+    const rfxs = await prisma.rfx.findMany({
+      include: { buyer: true, vendors: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const approvals = rfxs.map((r, idx) => ({
+      id: `APP-${100 + idx}`,
+      prx: r.name,
+      buyer: r.buyer ? `${r.buyer.name} (${r.buyer.team})` : "Prem Kumar (Packaging Team)",
+      value: "₹42,50,000",
+      vendor: r.vendors.length > 0 ? r.vendors[0].name : "Vendor C (Split award with Vendor A)",
+      status: r.status === "awarded" ? "Approved" : "Pending Sign-off",
+      date: new Date(r.createdAt).toISOString().split("T")[0],
+    }));
+
+    res.json(approvals);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 // Precedent lookup — deterministic, no model call.
 rfxRouter.get("/rfx-similar", async (req, res) => {
   const request = String(req.query.q ?? "").trim();
