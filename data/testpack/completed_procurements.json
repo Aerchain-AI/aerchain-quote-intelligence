@@ -1,0 +1,38 @@
+[
+  {
+    "event_id": "PRC-2025-041",
+    "title": "Warehouse Stretch Film & Strapping",
+    "category": "Packaging Consumables",
+    "completed_date": "2025-08-12",
+    "awarded_vendor_id": "V001",
+    "awarded_vendor": "Hyderabad Corrupack Pvt Ltd",
+    "award_value_inr": 1284000,
+    "baseline_inr": 1465000,
+    "savings_inr": 181000,
+    "savings_pct": 12.35
+  },
+  {
+    "event_id": "PRC-2025-077",
+    "title": "Corrugated Boxes \u2014 Hyderabad FC",
+    "category": "Corrugated Packaging",
+    "completed_date": "2025-12-03",
+    "awarded_vendor_id": "V002",
+    "awarded_vendor": "Deccan Packaging Solutions",
+    "award_value_inr": 2147500,
+    "baseline_inr": 2430000,
+    "savings_inr": 282500,
+    "savings_pct": 11.63
+  },
+  {
+    "event_id": "PRC-2026-019",
+    "title": "Sustainable E-commerce Packaging",
+    "category": "Sustainable Packaging",
+    "completed_date": "2026-04-22",
+    "awarded_vendor_id": "V005",
+    "awarded_vendor": "GreenWrap Packaging",
+    "award_value_inr": 1768000,
+    "baseline_inr": 1950000,
+    "savings_inr": 182000,
+    "savings_pct": 9.33
+  }
+]

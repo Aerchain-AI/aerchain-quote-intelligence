@@ -38,8 +38,26 @@ describe("parseSourceUnit", () => {
     expect(parseSourceUnit("per dozen", "pcs")).toEqual({ factor: 1, recognized: false });
   });
 
-  it("treats a missing unit as unrecognized", () => {
-    expect(parseSourceUnit(null, "pcs")).toEqual({ factor: 1, recognized: false });
+  // A stated unit we cannot convert and no stated unit at all are different
+  // problems. "Per dozen" against pieces is genuinely ambiguous and stays
+  // flagged and unusable. A rate card that names no unit is priced against the
+  // RFx line it sits on, and treating that as unusable discarded every price on
+  // an otherwise complete response. The basis is assumed, and disclosed.
+  it("reads a missing unit as the RFx unit, and marks the basis as assumed", () => {
+    expect(parseSourceUnit(null, "pcs")).toEqual({ factor: 1, recognized: true, assumed: true });
+    expect(parseSourceUnit("   ", "kg")).toEqual({ factor: 1, recognized: true, assumed: true });
+  });
+
+  it("still refuses a stated unit it cannot convert", () => {
+    expect(parseSourceUnit("per dozen", "pcs")).toEqual({ factor: 1, recognized: false });
+    expect(parseSourceUnit("per box", "pcs")).toEqual({ factor: 1, recognized: false });
+  });
+
+  it("accepts unit-agnostic phrasing whatever the RFx unit is", () => {
+    for (const phrase of ["per unit", "each", "ea", "nos", "unit"]) {
+      expect(parseSourceUnit(phrase, "kg")).toEqual({ factor: 1, recognized: true });
+      expect(parseSourceUnit(phrase, "rolls")).toEqual({ factor: 1, recognized: true });
+    }
   });
 });
 

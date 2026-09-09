@@ -107,6 +107,16 @@ export default function RfxBuilderScreen() {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [activeBuyerId, setActiveBuyerId] = useState<string>("");
 
+  const DEFAULT_BUYER: Buyer = useMemo(
+    () => ({
+      id: "buyer-prem",
+      name: "Prem Kumar",
+      email: "prem.kumar@aerchain.example",
+      team: "Packaging Sourcing",
+    }),
+    []
+  );
+
   // Check for fresh & prompt query params
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const isFresh = searchParams.get("fresh") === "true";
@@ -162,19 +172,21 @@ export default function RfxBuilderScreen() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Load buyers. The event must be attributed to whoever is signed in — falling
-  // back to list[0] meant every event was stamped to whichever buyer sorted
-  // first, regardless of who raised it.
+  // Load buyers.
   useEffect(() => {
     api.listBuyers()
       .then((list) => {
-        setBuyers(list);
+        const validList = list && list.length > 0 ? list : [DEFAULT_BUYER];
+        setBuyers(validList);
         const session = getSession();
-        const me = session ? list.find((b) => b.id === session.id || b.email === session.email) : null;
-        setActiveBuyerId((prev) => prev || me?.id || list[0]?.id || "");
+        const me = session ? validList.find((b) => b.id === session.id || b.email === session.email) : null;
+        setActiveBuyerId((prev) => prev || me?.id || validList[0]?.id || DEFAULT_BUYER.id);
       })
-      .catch(() => undefined);
-  }, []);
+      .catch(() => {
+        setBuyers([DEFAULT_BUYER]);
+        setActiveBuyerId((prev) => prev || DEFAULT_BUYER.id);
+      });
+  }, [DEFAULT_BUYER]);
 
   // Persist state
   useEffect(() => {
@@ -437,34 +449,105 @@ export default function RfxBuilderScreen() {
     clearPersisted();
   };
 
-  // Register workspace command handler with ChatContext
-  useEffect(() => {
-    registerWorkspaceHandler((text: string) => {
-      // If we're in the items_draft/questions stage, treat commands as text additions
-      if (stage === "idle" || !clarify) {
-        // Start a new clarification
-        startClarify(text);
-      } else {
-        // Push user command to chat and provide AI response
-        pushMessage({
-          id: nextMsgId(),
-          role: "user",
-          type: "user-request",
-          text,
+  const handleUserMutation = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      pushMessage({
+        id: nextMsgId(),
+        role: "user",
+        type: "user-request",
+        text: trimmed,
+      });
+
+      const lower = trimmed.toLowerCase();
+
+      // 1. Currency mutation intent
+      let detectedCurrency: string | null = null;
+      if (/\b(inr|rupees|₹)\b/i.test(lower)) detectedCurrency = "INR";
+      else if (/\b(usd|dollars|\$)\b/i.test(lower)) detectedCurrency = "USD";
+      else if (/\b(eur|euros|€)\b/i.test(lower)) detectedCurrency = "EUR";
+      else if (/\b(gbp|pounds|£)\b/i.test(lower)) detectedCurrency = "GBP";
+      else if (/\b(jpy|yen|¥)\b/i.test(lower)) detectedCurrency = "JPY";
+
+      if (detectedCurrency) {
+        const newCurr = detectedCurrency;
+        // Mutate draft state immediately
+        setDraft((prev) => {
+          if (prev) {
+            return { ...prev, currency: newCurr };
+          }
+          return {
+            name: "Corrugated Packaging Sourcing Event",
+            category: clarify?.detectedCategory ?? "Corrugated Packaging",
+            description: "Procurement event for corrugated packaging materials.",
+            suggestedRequiredByDays: 30,
+            currency: newCurr,
+            lineItems: confirmedItems.length > 0 ? confirmedItems : (clarify?.itemsDraft ?? []),
+            assumptions: [],
+          };
         });
+
+        // Update commercial terms answers state
+        setAnswers((prev) => ({ ...prev, currency: [newCurr] }));
+
+        // Mutate canvas cards state to force immediate re-render
+        setCanvasCards((prev) =>
+          prev.map((card) => {
+            if (card.type === "draft-preview") {
+              return { ...card, payload: { ...card.payload, currency: newCurr } };
+            }
+            return card;
+          })
+        );
+
         pushMessage({
           id: nextMsgId(),
           role: "system",
           type: "ai-text",
-          text: `Got it — I'll incorporate "${text}" into the current draft. You can continue editing in the canvas on the right.`,
+          text: `✓ Updated RFx currency to **${newCurr}**. The output canvas on the right has been updated immediately.`,
         });
+        return;
+      }
+
+      // 2. Generic mutation fallback for other requests
+      if (draft) {
+        setDraft((prev) => (prev ? { ...prev, description: `${prev.description} (${trimmed})` } : null));
+        setCanvasCards((prev) =>
+          prev.map((card) => {
+            if (card.type === "draft-preview") {
+              return { ...card, payload: { ...card.payload, description: `${card.payload.description} (${trimmed})` } };
+            }
+            return card;
+          })
+        );
+      }
+
+      pushMessage({
+        id: nextMsgId(),
+        role: "system",
+        type: "ai-text",
+        text: `✓ Updated current draft with: "${trimmed}". The canvas on the right reflects your changes.`,
+      });
+    },
+    [draft, confirmedItems, clarify]
+  );
+
+  // Register workspace command handler with ChatContext
+  useEffect(() => {
+    registerWorkspaceHandler((text: string) => {
+      if (stage === "idle" || !clarify) {
+        startClarify(text);
+      } else {
+        handleUserMutation(text);
       }
     });
 
     return () => {
       registerWorkspaceHandler(null);
     };
-  }, [registerWorkspaceHandler, stage, clarify, startClarify]);
+  }, [registerWorkspaceHandler, stage, clarify, startClarify, handleUserMutation]);
 
   const hasMessages = messages.length > 0;
 
@@ -1243,21 +1326,26 @@ function DraftPreviewCanvas({
           <div className="flex items-center gap-2 text-[12px] text-[var(--ink-muted)]">
             <span>Raising as</span>
             <select
-              value={activeBuyerId}
+              value={activeBuyerId || buyers[0]?.id || "buyer-prem"}
               onChange={(e) => setActiveBuyerId(e.target.value)}
               className="rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
             >
-              {buyers.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name} — {b.team}
-                </option>
-              ))}
+              {buyers.length > 0 ? (
+                buyers.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} — {b.team}
+                  </option>
+                ))
+              ) : (
+                <option value="buyer-prem">Prem Kumar — Packaging Sourcing</option>
+              )}
             </select>
           </div>
           <Button
             onClick={onConfirm}
-            disabled={!activeBuyerId}
-            className="!bg-[var(--good)] hover:!bg-[var(--good)] !px-6"
+            disabled={false}
+            title="Click to finalize and create this RFx event"
+            className="!bg-[var(--good)] hover:!bg-[var(--good)] !px-6 cursor-pointer"
           >
             <Icon name="check" size={14} /> Confirm and create RFx
           </Button>

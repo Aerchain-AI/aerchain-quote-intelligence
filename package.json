@@ -27,7 +27,8 @@
     "generate:inbound-samples": "npm run generate:inbound-samples --workspace=services/api",
     "inbox:reset": "npm run inbox:reset --workspace=services/api",
     "import:data": "npm run import:data --workspace=services/api --",
-    "db:wipe": "npm run db:wipe --workspace=services/api"
+    "db:wipe": "npm run db:wipe --workspace=services/api",
+    "import:testpack": "npm run import:testpack --workspace=services/api --"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",

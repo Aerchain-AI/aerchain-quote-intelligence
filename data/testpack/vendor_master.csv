@@ -1,0 +1,7 @@
+vendor_id,vendor_name,city,gstin,verification_status,payment_terms
+V001,Hyderabad Corrupack Pvt Ltd,Hyderabad,36AABCH1001Q1Z5,Verified,30 days
+V002,Deccan Packaging Solutions,Hyderabad,36AAEFD2002R1Z2,Verified,45 days
+V003,SouthBox Industries,Bengaluru,29AABCS3003S1Z8,Verified,30 days
+V004,MetroPack India,Chennai,33AABCM4004T1Z6,Pending Verification,30 days
+V005,GreenWrap Packaging,Hyderabad,36AABCG5005U1Z1,Verified,60 days
+V006,Apex Industrial Supplies,Pune,27AABCA6006V1Z4,Verified,45 days

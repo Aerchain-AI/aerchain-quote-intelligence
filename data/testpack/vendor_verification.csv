@@ -1,0 +1,6 @@
+vendor_id,vendor_name,status,verification_evidence,history
+V001,Hyderabad Corrupack Pvt Ltd,Verified,Historical award + GSTIN record,2 historical records
+V002,Deccan Packaging Solutions,Verified,Historical award + GSTIN record,2 historical records
+V003,SouthBox Industries,Verified,GSTIN record,No completed procurement in dataset
+V004,MetroPack India,Pending Verification,GSTIN provided; verification pending,No completed procurement in dataset
+V005,GreenWrap Packaging,Verified,Historical award + GSTIN record,1 historical award

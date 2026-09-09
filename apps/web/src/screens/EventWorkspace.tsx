@@ -23,17 +23,17 @@ interface TabDef {
   to: string;
   label: string;
   step: string;
-  /** Needs at least one processed vendor response to mean anything. */
-  needsResponses?: boolean;
+  requiresCreated?: boolean;
+  requiresResponses?: boolean;
 }
 
 const TABS: TabDef[] = [
   { to: "overview", label: "Overview", step: "1" },
-  { to: "responses", label: "Supplier Replies", step: "2" },
-  { to: "vendors", label: "Vendor Responses", step: "3", needsResponses: true },
-  { to: "comparison", label: "Comparison", step: "4", needsResponses: true },
-  { to: "award", label: "Award Recommendation", step: "5", needsResponses: true },
-  { to: "trust", label: "Accuracy", step: "6", needsResponses: true },
+  { to: "responses", label: "Supplier Replies", step: "2", requiresCreated: true },
+  { to: "vendors", label: "Vendor Responses", step: "3", requiresCreated: true },
+  { to: "comparison", label: "Comparison", step: "4", requiresCreated: true, requiresResponses: true },
+  { to: "award", label: "Award Recommendation", step: "5", requiresCreated: true, requiresResponses: true },
+  { to: "trust", label: "Accuracy", step: "6", requiresCreated: true, requiresResponses: true },
 ];
 
 export default function EventWorkspace() {
@@ -64,11 +64,18 @@ export default function EventWorkspace() {
     );
   }
 
+  const isDraft = detail.status === "draft";
   const hasResponses = detail.vendors.length > 0;
-  const disabledReason =
-    detail.status === "draft"
-      ? "This event is still a draft — no vendor responses have been collected yet."
-      : "No vendor responses are stored against this event.";
+
+  const getDisabledReason = (tab: TabDef) => {
+    if (tab.requiresCreated && isDraft) {
+      return "Please confirm and create the RFx before uploading vendor quotes.";
+    }
+    if (tab.requiresResponses && !hasResponses) {
+      return "No vendor responses are stored against this event yet. Upload quotes in Vendor Responses to unlock.";
+    }
+    return "";
+  };
 
   return (
     <div className="min-h-[100dvh]">
@@ -77,8 +84,6 @@ export default function EventWorkspace() {
         style={{ borderColor: "var(--line)" }}
       >
         <div className="mx-auto max-w-[1600px] px-6 py-3">
-          {/* In-context way out. The sidebar can get you back, but a workspace
-              you drilled into should say where it came from. */}
           <Link
             to="/events"
             className="pressable inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)]"
@@ -106,8 +111,10 @@ export default function EventWorkspace() {
         <nav className="mx-auto max-w-[1600px] px-6">
           <div className="flex gap-1 overflow-x-auto">
             {TABS.map((tab) => {
-              const blocked = Boolean(tab.needsResponses) && !hasResponses;
-              if (blocked) {
+              const disabledReason = getDisabledReason(tab);
+              const isBlocked = Boolean(disabledReason);
+
+              if (isBlocked) {
                 return (
                   <span
                     key={tab.to}
@@ -141,30 +148,29 @@ export default function EventWorkspace() {
       </header>
 
       <main className={isComparisonRoute ? "px-4 py-2 overflow-x-hidden" : "mx-auto max-w-[1600px] px-6 py-6"}>
-        {!hasResponses && (
+        {isDraft && (
           <p
             className="mb-4 flex items-start gap-2 rounded-lg px-4 py-2.5 text-[12px] leading-relaxed text-[var(--ink-secondary)]"
-            style={{ border: "1px solid var(--line)", background: "var(--surface-sunken)" }}
+            style={{ border: "1px solid var(--warning-line)", background: "var(--warning-soft)" }}
           >
-            <span className="mt-[1px] text-[var(--ink-muted)]">
+            <span className="mt-[1px] text-[var(--warning)]">
               <Icon name="info" size={14} />
             </span>
-            {disabledReason} The later steps unlock once responses are ingested.
+            Please confirm and create the RFx before uploading vendor quotes.
           </p>
         )}
         <Routes>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<EventOverview rfxId={rfxId} onSaved={load} />} />
           <Route path="responses" element={<ResponsesScreen rfxId={rfxId} />} />
+          <Route path="vendors/*" element={<VendorsScreen rfxId={detail.id} />} />
           {hasResponses && (
             <>
-              <Route path="vendors/*" element={<VendorsScreen rfxId={detail.id} />} />
               <Route path="comparison" element={<ComparisonScreen rfxId={detail.id} />} />
               <Route path="award" element={<AwardScreen rfxId={detail.id} />} />
               <Route path="trust" element={<TrustScreen rfxId={detail.id} />} />
             </>
           )}
-          {/* Any workflow route on an event without responses falls back to overview. */}
           <Route path="*" element={<Navigate to="overview" replace />} />
         </Routes>
       </main>

@@ -9,17 +9,31 @@ const UNIT_WORDS: Record<string, string[]> = {
   kg: ["kg", "kgs", "kilogram", "kilograms"],
 };
 
+/** Phrases that name no unit of their own and so inherit the RFx's. */
+const GENERIC_UNIT = /^\s*(?:per\s+)?(?:unit|units|each|ea|no\.?|nos\.?|item)\s*$|^\s*\/\s*(?:unit|each)\s*$/;
+
 export interface UnitParseResult {
   /** number of source-units per 1 RFx-unit price, e.g. 100 for "per 100 pieces" */
   factor: number;
   /** false when the source unit text couldn't be confidently matched to the RFx unit family */
   recognized: boolean;
+  /** true when no unit was stated and the RFx's own unit was taken as the basis */
+  assumed?: boolean;
 }
 
 /** Deterministic unit-quantity parsing — PRD §29: normalize automatically when the
  * conversion is clear ("per 100 pieces" -> divide by 100); never invent a factor. */
 export function parseSourceUnit(sourceUnit: string | null, rfxUnit: string): UnitParseResult {
-  if (!sourceUnit) return { factor: 1, recognized: false };
+  // No unit stated at all. That is not the same as a unit we cannot reconcile:
+  // the rate sits against an RFx line whose quantity the vendor copied, so the
+  // only available reading is "per one of what was asked for". Discarding it
+  // instead threw away every price on a rate card that omits the word "each" —
+  // a complete, usable response reduced to nothing.
+  //
+  // So the price is used and the assumption is disclosed, rather than the price
+  // being dropped or the assumption being made silently. A vendor who states a
+  // unit we genuinely cannot convert is still flagged and excluded below.
+  if (!sourceUnit || !sourceUnit.trim()) return { factor: 1, recognized: true, assumed: true };
   const normalized = sourceUnit.toLowerCase();
 
   const perNMatch = normalized.match(/per\s+(\d+)/);
@@ -27,6 +41,14 @@ export function parseSourceUnit(sourceUnit: string | null, rfxUnit: string): Uni
 
   const words = UNIT_WORDS[rfxUnit] ?? [];
   if (words.some((w) => normalized.includes(w))) return { factor: 1, recognized: true };
+
+  // Unit-agnostic phrasing: "per unit", "each", "per no." all mean one of
+  // whatever the RFx asked for, whichever unit that is. The factor of 1 is the
+  // literal meaning of the words, not a factor invented to make the row
+  // comparable — which is the thing this function refuses to do. Flagging these
+  // buried the genuinely ambiguous cases, like a basis mismatch on "per 100
+  // pieces", under dozens of warnings about a phrase that is not ambiguous.
+  if (GENERIC_UNIT.test(normalized)) return { factor: 1, recognized: true };
 
   return { factor: 1, recognized: false };
 }
@@ -89,6 +111,8 @@ export interface NormalizedQuote {
   freight: MoneyAdjustment | null;
   tax: MoneyAdjustment | null;
   unitRecognized: boolean;
+  /** True when no unit was stated and the RFx unit was taken as the basis. */
+  unitAssumed: boolean;
 }
 
 const BASE_CURRENCY: Currency = "INR";
@@ -111,10 +135,11 @@ export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineIt
       freight,
       tax,
       unitRecognized: false,
+      unitAssumed: false,
     };
   }
 
-  const { factor, recognized } = parseSourceUnit(extracted.sourceUnit, rfxLineItem.unit);
+  const { factor, recognized, assumed } = parseSourceUnit(extracted.sourceUnit, rfxLineItem.unit);
   const { value: inBaseCurrency, fxRateUsed } = convertToBaseCurrency(
     extracted.sourceValue,
     extracted.sourceCurrency,
@@ -133,6 +158,7 @@ export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineIt
       freight,
       tax,
       unitRecognized: false,
+      unitAssumed: false,
     };
   }
 
@@ -163,5 +189,6 @@ export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineIt
     freight,
     tax,
     unitRecognized: true,
+    unitAssumed: assumed === true,
   };
 }

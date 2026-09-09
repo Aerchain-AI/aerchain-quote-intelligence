@@ -32,6 +32,18 @@ export function validateLine(extracted: ExtractedLineItem, normalized: Normalize
     return { status: "not_quoted", confidenceLevel: null, exceptions };
   }
 
+  // The basis was assumed rather than read. The price is usable, but the buyer
+  // is told on which footing, because an assumption nobody can see is the same
+  // as a guess.
+  if (normalized.unitAssumed) {
+    exceptions.push({
+      lineItemId,
+      type: "different_unit",
+      message: `No unit stated against this line. Read as a rate per ${normalized.normalizedUnit}, matching the RFx — confirm if the vendor priced on another basis.`,
+      severity: "info",
+    });
+  }
+
   if (!normalized.unitRecognized) {
     // Quoted, but the unit couldn't be confidently reconciled with the RFx unit —
     // distinct from "not quoted at all": we know a price exists, just not how to

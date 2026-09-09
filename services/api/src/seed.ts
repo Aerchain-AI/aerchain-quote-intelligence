@@ -6,16 +6,35 @@ import { VENDOR_DOCS_DIR } from "./paths.js";
 export async function runSeed() {
   console.log("[seed] Seeding database...");
 
-  // Seed default Buyer
-  const buyer = await prisma.buyer.upsert({
+  // Seed default Buyer (Prem Kumar) and demo profiles
+  const premBuyer = await prisma.buyer.upsert({
     where: { email: "prem.kumar@aerchain.example" },
     create: {
+      id: "buyer-prem",
       name: "Prem Kumar",
       email: "prem.kumar@aerchain.example",
       team: "Packaging Sourcing",
     },
-    update: {},
+    update: {
+      name: "Prem Kumar",
+      team: "Packaging Sourcing",
+    },
   });
+
+  const DEMO_BUYERS = [
+    { id: "buyer-001", name: "Priya Sharma", email: "priya.sharma@aerchain.io", team: "Packaging Procurement" },
+    { id: "buyer-002", name: "Rahul Mehta", email: "rahul.mehta@aerchain.io", team: "Indirect Procurement" },
+    { id: "buyer-003", name: "Ananya Iyer", email: "ananya.iyer@aerchain.io", team: "Direct Procurement" },
+    { id: "buyer-004", name: "Karthik Nair", email: "karthik.nair@aerchain.io", team: "Strategic Sourcing" },
+  ];
+
+  for (const b of DEMO_BUYERS) {
+    await prisma.buyer.upsert({
+      where: { id: b.id },
+      create: b,
+      update: { name: b.name, email: b.email, team: b.team },
+    });
+  }
 
   // Seed Suppliers
   const SUPPLIERS = [
@@ -99,7 +118,7 @@ export async function runSeed() {
         requiredByDate: new Date("2027-01-15"),
         currency: RFX_BASE_CURRENCY,
         description: "Sourcing event for corrugated packaging materials.",
-        buyerId: buyer.id,
+        buyerId: premBuyer.id,
       },
     });
 

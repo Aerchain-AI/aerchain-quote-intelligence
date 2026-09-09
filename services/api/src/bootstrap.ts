@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { API_ROOT } from "./paths.js";
+import { runSeed } from "./seed.js";
 
 /**
  * Demo database bootstrap.
@@ -22,7 +23,6 @@ import { API_ROOT } from "./paths.js";
 const WORKING_DB = path.join(API_ROOT, "prisma", "dev.db");
 const DEMO_SNAPSHOT = path.join(API_ROOT, "prisma", "demo.db");
 
-import { runSeed } from "./seed.js";
 
 export async function bootstrapDatabase(): Promise<void> {
   if (fs.existsSync(WORKING_DB) && fs.statSync(WORKING_DB).size > 0) {

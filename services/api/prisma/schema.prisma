@@ -203,6 +203,16 @@ model Supplier {
   /// Free-text note on what they have supplied before.
   pastWork String?
 
+  /// Registration details from the supplier master. The verification status is
+  /// shown wherever the supplier appears, because awarding to one whose
+  /// registration is still pending is a decision, not a detail.
+  city               String?
+  gstin              String?
+  /// verified | pending | unverified
+  verificationStatus String  @default("unverified")
+  verificationNote   String?
+  paymentTerms       String?
+
   eventsInvited     Int       @default(0)
   eventsQuoted      Int       @default(0)
   eventsAwarded     Int       @default(0)
@@ -214,10 +224,58 @@ model Supplier {
   /// True when added during an invite with no prior history.
   isNew             Boolean   @default(false)
 
-  createdAt   DateTime        @default(now())
-  invitations RfxInvitation[]
+  createdAt     DateTime            @default(now())
+  invitations   RfxInvitation[]
+  participation PastParticipation[]
 
   @@index([category])
+}
+
+/// A procurement that completed before this system existed.
+///
+/// Its award value and saving were supplied as a record, not computed here. They
+/// live in their own table and are labelled at every point of display, because a
+/// number this system can prove and a number it was told are not the same kind of
+/// thing, and letting the two mix would quietly undo the reason the derivation
+/// panel exists.
+model PastProcurement {
+  id          String   @id @default(uuid())
+  /// The reference the record arrived with, e.g. PRC-2025-041.
+  externalId  String   @unique
+  title       String
+  category    String
+  completedAt DateTime
+
+  awardedSupplierId String?
+  awardedVendorName String
+  awardValueInr     Float
+  baselineInr       Float?
+  savingsInr        Float?
+  savingsPct        Float?
+
+  /// Where these figures came from. Never "computed by this system".
+  source String @default("Imported historical record")
+
+  participation PastParticipation[]
+
+  @@index([category])
+}
+
+/// One supplier's involvement in a past procurement, awarded or not.
+model PastParticipation {
+  id               String  @id @default(uuid())
+  supplierId       String
+  procurementId    String
+  /// awarded | participated
+  result           String
+  performance      String?
+  qualityIncidents Int     @default(0)
+
+  supplier    Supplier        @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  procurement PastProcurement @relation(fields: [procurementId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, procurementId])
+  @@index([supplierId])
 }
 
 /// One supplier invited to one RFx, with the exact email that was sent.

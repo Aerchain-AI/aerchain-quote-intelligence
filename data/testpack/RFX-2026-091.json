@@ -1,0 +1,222 @@
+{
+  "rfx_id": "RFX-2026-091",
+  "title": "Corrugated Packaging – Hyderabad FY27 Fulfillment",
+  "request": "Corrugated packaging for our Hyderabad fulfillment operations",
+  "created": "2026-09-04",
+  "required_by": "2027-01-15",
+  "response_deadline": "2026-09-18",
+  "delivery_location": "Hyderabad Fulfillment Operations",
+  "currency": "INR preferred; USD accepted with disclosed FX rate",
+  "line_items": [
+    {
+      "line_no": 1,
+      "item": "5-Ply Corrugated Box – Small",
+      "specification": "300×200×150 mm",
+      "quantity": 10000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 2,
+      "item": "5-Ply Corrugated Box – Medium",
+      "specification": "400×300×250 mm",
+      "quantity": 8000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 3,
+      "item": "5-Ply Corrugated Box – Large",
+      "specification": "600×400×400 mm",
+      "quantity": 5000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 4,
+      "item": "3-Ply Corrugated Box – Small",
+      "specification": "250×180×120 mm",
+      "quantity": 12000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 5,
+      "item": "3-Ply Corrugated Box – Medium",
+      "specification": "350×250×200 mm",
+      "quantity": 10000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 6,
+      "item": "3-Ply Corrugated Box – Large",
+      "specification": "500×350×300 mm",
+      "quantity": 6000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 7,
+      "item": "Die-Cut Box – Type A",
+      "specification": "Custom die-cut",
+      "quantity": 4000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 8,
+      "item": "Die-Cut Box – Type B",
+      "specification": "Custom die-cut",
+      "quantity": 3500,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 9,
+      "item": "Corrugated Sheet – Small",
+      "specification": "500×400 mm",
+      "quantity": 5000,
+      "unit": "sheets"
+    },
+    {
+      "line_no": 10,
+      "item": "Corrugated Sheet – Large",
+      "specification": "1000×800 mm",
+      "quantity": 3000,
+      "unit": "sheets"
+    },
+    {
+      "line_no": 11,
+      "item": "5-Ply Corrugated Roll",
+      "specification": "1200 mm width",
+      "quantity": 1500,
+      "unit": "kg"
+    },
+    {
+      "line_no": 12,
+      "item": "3-Ply Corrugated Roll",
+      "specification": "1000 mm width",
+      "quantity": 1000,
+      "unit": "kg"
+    },
+    {
+      "line_no": 13,
+      "item": "Kraft Paper Tape",
+      "specification": "48 mm",
+      "quantity": 5000,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 14,
+      "item": "BOPP Packaging Tape",
+      "specification": "48 mm",
+      "quantity": 10000,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 15,
+      "item": "Printed Packaging Tape",
+      "specification": "Custom print",
+      "quantity": 3000,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 16,
+      "item": "Paper Labels",
+      "specification": "100×50 mm",
+      "quantity": 50000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 17,
+      "item": "Fragile Labels",
+      "specification": "Standard",
+      "quantity": 25000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 18,
+      "item": "Barcode Labels",
+      "specification": "Custom barcode",
+      "quantity": 30000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 19,
+      "item": "Edge Protectors – Small",
+      "specification": "Standard",
+      "quantity": 10000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 20,
+      "item": "Edge Protectors – Large",
+      "specification": "Standard",
+      "quantity": 8000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 21,
+      "item": "Corrugated Partition – 6 Cell",
+      "specification": "Custom",
+      "quantity": 5000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 22,
+      "item": "Corrugated Partition – 12 Cell",
+      "specification": "Custom",
+      "quantity": 4000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 23,
+      "item": "Paper Void Fill",
+      "specification": "Recyclable",
+      "quantity": 2000,
+      "unit": "kg"
+    },
+    {
+      "line_no": 24,
+      "item": "Kraft Paper Sheets",
+      "specification": "500×500 mm",
+      "quantity": 5000,
+      "unit": "sheets"
+    },
+    {
+      "line_no": 25,
+      "item": "Stretch Film",
+      "specification": "500 mm",
+      "quantity": 2000,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 26,
+      "item": "Bubble Wrap",
+      "specification": "1 m width",
+      "quantity": 1500,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 27,
+      "item": "PP Strapping",
+      "specification": "12 mm",
+      "quantity": 3000,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 28,
+      "item": "PET Strapping",
+      "specification": "16 mm",
+      "quantity": 2000,
+      "unit": "rolls"
+    },
+    {
+      "line_no": 29,
+      "item": "Wooden Pallet",
+      "specification": "1200×1000 mm",
+      "quantity": 1000,
+      "unit": "pcs"
+    },
+    {
+      "line_no": 30,
+      "item": "Corrugated Pallet",
+      "specification": "1200×1000 mm",
+      "quantity": 1500,
+      "unit": "pcs"
+    }
+  ]
+}

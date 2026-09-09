@@ -18,7 +18,10 @@ import { vendorsRouter } from "./routes/vendors.js";
 // nothing here fails when the file is absent.
 dotenv.config({ path: path.join(REPO_ROOT, ".env") });
 
-bootstrapDatabase();
+// Awaited: bootstrapDatabase became async when it gained the auto-seed path, and
+// firing it without waiting lets the server accept requests against a database
+// that is still being populated.
+await bootstrapDatabase();
 
 const app = express();
 app.use(cors());
