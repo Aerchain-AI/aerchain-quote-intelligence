@@ -95,3 +95,65 @@ export async function findSimilarRfx(
 
   return scored.sort((a, b) => b.score - a.score).slice(0, limit);
 }
+
+
+/**
+ * Procurement that closed before this system, matched against a new request.
+ *
+ * These records carry a category, who won and what it cost, but no line items —
+ * so there is nothing to copy from them and they are returned as a separate
+ * list rather than mixed in with reorderable events. A precedent you can clone
+ * and a precedent you can only read are different offers to make a buyer, and
+ * presenting them as one would promise a button that cannot exist.
+ *
+ * Same deterministic token overlap, no model call.
+ */
+export interface SimilarPastProcurement {
+  externalId: string;
+  title: string;
+  category: string;
+  completedAt: string;
+  awardedVendorName: string;
+  awardValueInr: number;
+  savingsInr: number | null;
+  savingsPct: number | null;
+  score: number;
+  matchedOn: string[];
+  /** Stated on every record: nothing here was computed by this system. */
+  basis: string;
+}
+
+export async function findSimilarPastProcurement(
+  request: string,
+  options: { limit?: number; minScore?: number } = {},
+): Promise<SimilarPastProcurement[]> {
+  const { limit = 3, minScore = 0.08 } = options;
+  const requestTokens = new Set(tokenize(request));
+  if (requestTokens.size === 0) return [];
+
+  const records = await prisma.pastProcurement.findMany({ orderBy: { completedAt: "desc" } });
+
+  const scored = records.map((r) => {
+    const haystack = tokenize(`${r.title} ${r.category} ${r.awardedVendorName}`);
+    const matched = [...new Set(haystack.filter((t) => requestTokens.has(t)))];
+    const score = requestTokens.size === 0 ? 0 : matched.length / requestTokens.size;
+    return {
+      externalId: r.externalId,
+      title: r.title,
+      category: r.category,
+      completedAt: r.completedAt.toISOString(),
+      awardedVendorName: r.awardedVendorName,
+      awardValueInr: r.awardValueInr,
+      savingsInr: r.savingsInr,
+      savingsPct: r.savingsPct,
+      score,
+      matchedOn: matched,
+      basis: r.source,
+    };
+  });
+
+  return scored
+    .filter((r) => r.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}

@@ -188,6 +188,20 @@ export interface RfxFacets {
   buyers: Buyer[];
 }
 
+export interface SimilarPastProcurement {
+  externalId: string;
+  title: string;
+  category: string;
+  completedAt: string;
+  awardedVendorName: string;
+  awardValueInr: number;
+  savingsInr: number | null;
+  savingsPct: number | null;
+  score: number;
+  matchedOn: string[];
+  basis: string;
+}
+
 export interface ClarifyResult {
   interpretation: string;
   detectedCategory: string;
@@ -195,6 +209,8 @@ export interface ClarifyResult {
   itemsDraft?: DraftLineItem[];
   questions: ClarifyQuestion[];
   similar: SimilarRfx[];
+  /** Closed procurement matching the request. Context only — no line items to copy. */
+  priorProcurement?: SimilarPastProcurement[];
 }
 
 export interface LineItem {
@@ -526,7 +542,13 @@ export interface InvitedResponse {
   snippet: string | null;
   attachments: string[];
   vendorId: string | null;
+  vendorName: string | null;
   vendorStatus: string | null;
+  responseFormat: string | null;
+  itemsFound: number | null;
+  itemsMissing: number | null;
+  /** The document the supplier sent, openable so a reviewer can check it. */
+  documentUrl: string | null;
   matchedBy: string | null;
 }
 
@@ -568,8 +590,34 @@ export interface UnmatchedMessage {
 export const api = {
   listRfx: (scope?: "active") => get<Rfx[]>(`/rfx${scope ? `?scope=${scope}` : ""}`),
   listBuyers: () => get<Buyer[]>("/buyers"),
+  findPriorProcurement: (q: string) =>
+    get<SimilarPastProcurement[]>(`/procurement-precedent?q=${encodeURIComponent(q)}`),
   findSimilarRfx: (q: string) => get<SimilarRfx[]>(`/rfx-similar?q=${encodeURIComponent(q)}`),
-  clarifyRfx: (description: string) => post<ClarifyResult>("/rfx/clarify", { description }),
+  /**
+   * Clarifying questions, plus the precedent that goes with them.
+   *
+   * The precedent search is deterministic and needs no model, so when the model
+   * is unavailable the server still returns it. This call therefore reads the
+   * body on a failure too, rather than throwing it away: "you have bought this
+   * before, from them, at that price" is exactly the thing worth showing when
+   * the drafting assistant is down, and it is the half that cannot fail.
+   */
+  clarifyRfx: async (description: string): Promise<ClarifyResult> => {
+    const res = await fetch(`${BASE}/rfx/clarify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) return body as ClarifyResult;
+    const error = new Error(body.detail ?? body.error ?? `${res.status} ${res.statusText}`) as Error & {
+      similar?: SimilarRfx[];
+      priorProcurement?: SimilarPastProcurement[];
+    };
+    error.similar = body.similar ?? [];
+    error.priorProcurement = body.priorProcurement ?? [];
+    throw error;
+  },
   createRfx: (payload: Record<string, unknown>) => post<Rfx>("/rfx", payload),
   getRfx: (id: string) => get<RfxDetail>(`/rfx/${id}`),
   getRfxFacets: () => get<RfxFacets>("/rfx-facets"),

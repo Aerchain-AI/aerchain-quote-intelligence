@@ -2,7 +2,7 @@ import { Router } from "express";
 import { prisma } from "../db.js";
 import { clarifyRfxRequest } from "../llm/rfxClarify.js";
 import { draftRfx, type ClarificationAnswer } from "../llm/rfxDraft.js";
-import { findSimilarRfx } from "../rfx/similar.js";
+import { findSimilarPastProcurement, findSimilarRfx } from "../rfx/similar.js";
 import { buildTimeline } from "../rfx/timeline.js";
 
 export const rfxRouter = Router();
@@ -51,21 +51,35 @@ rfxRouter.get("/rfx-similar", async (req, res) => {
   res.json(await findSimilarRfx(request));
 });
 
+/** Closed procurement resembling the request. Context, not a template. */
+rfxRouter.get("/procurement-precedent", async (req, res) => {
+  const request = String(req.query.q ?? "").trim();
+  if (!request) return res.json([]);
+  res.json(await findSimilarPastProcurement(request));
+});
+
 // Stage 1 of creation: ask before drafting. Returns the questions AND any past
 // events resembling the request, so the buyer sees precedent at the same moment.
 rfxRouter.post("/rfx/clarify", async (req, res) => {
   const description = String(req.body?.description ?? "").trim();
   if (!description) return res.status(400).json({ error: "A description is required." });
   try {
-    const [clarification, similar] = await Promise.all([
+    const [clarification, similar, priorProcurement] = await Promise.all([
       clarifyRfxRequest(description),
       findSimilarRfx(description),
+      findSimilarPastProcurement(description),
     ]);
-    res.json({ ...clarification, similar });
+    res.json({ ...clarification, similar, priorProcurement });
   } catch (err) {
     // Precedent still works without the model, so return it rather than nothing.
     const similar = await findSimilarRfx(description).catch(() => []);
-    res.status(502).json({ error: "Could not prepare clarifying questions.", detail: (err as Error).message, similar });
+    const priorProcurement = await findSimilarPastProcurement(description).catch(() => []);
+    res.status(502).json({
+      error: "Could not prepare clarifying questions.",
+      detail: (err as Error).message,
+      similar,
+      priorProcurement,
+    });
   }
 });
 

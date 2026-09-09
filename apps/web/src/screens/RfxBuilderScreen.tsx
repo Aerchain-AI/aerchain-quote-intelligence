@@ -6,11 +6,13 @@ import { useGlobalChat } from "../lib/ChatContext";
 import { getSession } from "../lib/auth";
 import {
   api,
+  formatInr,
   type Buyer,
   type ClarifyQuestion,
   type ClarifyResult,
   type DraftLineItem,
   type RfxDraft,
+  type SimilarPastProcurement,
   type SimilarRfx,
 } from "../lib/api";
 
@@ -43,6 +45,7 @@ type CanvasCardType =
   | "extraction-summary"
   | "item-draft"
   | "similar-events"
+  | "prior-procurement"
   | "commercial-terms"
   | "draft-preview";
 
@@ -271,6 +274,19 @@ export default function RfxBuilderScreen() {
         },
       ]);
     } catch (err) {
+      // The drafting assistant failed, but the precedent search did not — it is
+      // deterministic and never calls a model. Showing it here means a buyer
+      // still learns they have bought this before, from whom and at what price,
+      // on the day the model is unavailable.
+      const carried = err as Error & { priorProcurement?: SimilarPastProcurement[] };
+      const prior = carried.priorProcurement ?? [];
+      if (prior.length > 0) {
+        setCanvasCards((prev) => [
+          ...prev,
+          { id: nextMsgId(), type: "prior-procurement", payload: prior },
+        ]);
+      }
+
       setStageError((err as Error).message);
       setStage("idle");
       setMessages((prev) => {
@@ -278,6 +294,16 @@ export default function RfxBuilderScreen() {
         return [
           ...withoutSpinner,
           { id: nextMsgId(), role: "system" as const, type: "error" as const, text: (err as Error).message },
+          ...(prior.length > 0
+            ? [
+                {
+                  id: nextMsgId(),
+                  role: "system" as const,
+                  type: "ai-text" as const,
+                  text: `Drafting is unavailable, but I can still tell you this has been bought before — ${prior.length} closed procurement(s) match. They are on the canvas.`,
+                },
+              ]
+            : []),
         ];
       });
     }
@@ -299,6 +325,11 @@ export default function RfxBuilderScreen() {
 
     // Fetch past events based on confirmed items & category
     const queryStr = [clarify?.detectedCategory, ...items.map((i) => i.name)].filter(Boolean).join(" ");
+    // Closed procurement matching the request. Fetched alongside the similar
+    // events because it answers a different question: not "can I copy this" but
+    // "what did this cost last time, and who won it".
+    const priorProcurement = await api.findPriorProcurement(queryStr).catch(() => []);
+
     let similarEvents: SimilarRfx[] = [];
     try {
       similarEvents = await api.findSimilarRfx(queryStr);
@@ -322,6 +353,14 @@ export default function RfxBuilderScreen() {
         }
         return card;
       });
+
+      if (priorProcurement.length > 0) {
+        updated.push({
+          id: nextMsgId(),
+          type: "prior-procurement",
+          payload: priorProcurement,
+        });
+      }
 
       if (similarEvents.length > 0) {
         updated.push({
@@ -837,6 +876,8 @@ function CanvasCardRenderer(ctx: CanvasRenderContext) {
       );
     case "similar-events":
       return <SimilarEventsCanvas key={card.id} similar={card.payload as SimilarRfx[]} navigate={ctx.navigate} />;
+    case "prior-procurement":
+      return <PriorProcurementCanvas key={card.id} records={card.payload as SimilarPastProcurement[]} />;
     case "commercial-terms":
       return (
         <CommercialTermsCanvas
@@ -1078,6 +1119,79 @@ function InteractiveItemDraftCanvas({
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Procurement that already closed, matched against what the buyer just asked for.
+ *
+ * Offered as context, never as a template. These records hold a category, a
+ * winner and a price, and no line items, so there is nothing to clone from them
+ * and no button here pretends otherwise. What they are good for is the question
+ * a buyer actually asks at this moment: what did this cost last time, and who
+ * won it.
+ *
+ * Nothing here changes the draft on its own. The clarifying questions and the
+ * human confirmation that follow are unchanged — precedent informs the buyer,
+ * it does not decide for them.
+ */
+function PriorProcurementCanvas({ records }: { records: SimilarPastProcurement[] }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+      <div className="flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface-sunken)] px-5 py-3">
+        <span
+          className="flex h-6 w-6 items-center justify-center rounded-lg"
+          style={{ background: "var(--surface-inverse)", color: "var(--ink-inverse)" }}
+        >
+          <Icon name="clock" size={13} />
+        </span>
+        <div>
+          <p className="text-[13px] font-semibold text-[var(--ink)]">You have bought this before</p>
+          <p className="text-[11.5px] text-[var(--ink-muted)]">
+            {records.length} closed procurement{records.length === 1 ? "" : "s"} matching your request
+          </p>
+        </div>
+      </div>
+
+      <div>
+        {records.map((r) => (
+          <div key={r.externalId} className="px-5 py-3.5" style={{ borderTop: "1px solid var(--line)" }}>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <span className="text-[13px] font-medium text-[var(--ink)]">{r.title}</span>
+              <span className="num text-[11px] text-[var(--ink-muted)]">
+                {new Date(r.completedAt).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}
+              </span>
+            </div>
+            <p className="mt-1 text-[12px] text-[var(--ink-secondary)]">
+              Awarded to <span className="font-medium text-[var(--ink)]">{r.awardedVendorName}</span> at{" "}
+              <span className="num font-medium text-[var(--ink)]">{formatInr(r.awardValueInr)}</span>
+              {r.savingsInr != null && (
+                <>
+                  , saving <span className="num">{formatInr(r.savingsInr)}</span>
+                  {r.savingsPct != null && <span className="num"> ({r.savingsPct}%)</span>}
+                </>
+              )}
+            </p>
+            {r.matchedOn.length > 0 && (
+              <p className="mt-1 text-[11px] text-[var(--ink-muted)]">Matched on: {r.matchedOn.join(", ")}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p
+        className="flex items-start gap-2 px-5 py-3 text-[11.5px] leading-relaxed text-[var(--ink-muted)]"
+        style={{ borderTop: "1px solid var(--line)", background: "var(--surface-sunken)" }}
+      >
+        <span className="mt-[1px]">
+          <Icon name="info" size={13} />
+        </span>
+        <span className="measure">
+          No line items are held against these records, so there is nothing to copy into your draft. They are shown so
+          you can price this against what it cost last time. {records[0]?.basis}
+        </span>
+      </p>
     </div>
   );
 }

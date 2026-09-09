@@ -126,8 +126,22 @@ export default function ResponsesScreen({ rfxId }: { rfxId: string }) {
               <tbody>
                 {ledger.invited.map((invite) => {
                   const awaiting = invite.status !== "responded";
+                  const open = () => invite.vendorId && navigate(`/events/${rfxId}/vendors/${invite.vendorId}`);
                   return (
-                    <tr key={invite.supplierId}>
+                    <tr
+                      key={invite.supplierId}
+                      onClick={open}
+                      onKeyDown={(e) => {
+                        if (invite.vendorId && (e.key === "Enter" || e.key === " ")) {
+                          e.preventDefault();
+                          open();
+                        }
+                      }}
+                      tabIndex={invite.vendorId ? 0 : undefined}
+                      role={invite.vendorId ? "link" : undefined}
+                      className={invite.vendorId ? "cursor-pointer" : undefined}
+                      title={invite.vendorId ? `Open ${invite.name}'s response to review it` : undefined}
+                    >
                       <td className="text-left">
                         <div className="text-[13px] font-medium text-[var(--ink)]">{invite.name}</div>
                         <div className="text-[11px] text-[var(--ink-muted)]">{invite.email}</div>
@@ -136,12 +150,21 @@ export default function ResponsesScreen({ rfxId }: { rfxId: string }) {
                         {awaiting ? (
                           <StatusPill status="pending" />
                         ) : invite.vendorId ? (
-                          <StatusPill status="processed" />
+                          // The response's own status, not a generic "replied".
+                          // A quotation needing review is the thing a buyer most
+                          // wants to click, so it says so and it opens.
+                          <StatusPill status={invite.vendorStatus ?? "pending"} />
                         ) : (
                           <StatusPill status="review_required" />
                         )}
                         {!awaiting && !invite.vendorId && (
                           <div className="mt-1 text-[11px] text-[var(--ink-muted)]">Replied, no quotation attached</div>
+                        )}
+                        {invite.itemsFound != null && (
+                          <div className="num mt-1 text-[11px] text-[var(--ink-muted)]">
+                            {invite.itemsFound} priced
+                            {invite.itemsMissing ? `, ${invite.itemsMissing} missing` : ""}
+                          </div>
                         )}
                       </td>
                       <td className="max-w-[22rem] text-left">
@@ -166,20 +189,32 @@ export default function ResponsesScreen({ rfxId }: { rfxId: string }) {
                         )}
                       </td>
                       <td className="text-left">
-                        {invite.attachments.length > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/events/${rfxId}/vendors`)}
+                        {invite.documentUrl ? (
+                          // The document itself, not a link to a screen about it.
+                          // Anyone auditing the comparison should be one click
+                          // from what the supplier actually sent.
+                          <a
+                            href={invite.documentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
                             className="pressable inline-flex items-center gap-1.5 text-[12px] text-[var(--ink)] underline decoration-[var(--line-strong)] underline-offset-4 hover:decoration-[var(--ink)]"
+                            title="Open the document this supplier sent"
                           >
                             <Icon name="attachment" size={12} />
-                            {invite.attachments.join(", ")}
-                          </button>
+                            {invite.attachments[0] ??
+                              `${invite.name.split(" ")[0]}.${invite.responseFormat ?? "file"}`}
+                          </a>
                         ) : (
                           <span className="text-[12px] text-[var(--ink-muted)]">—</span>
                         )}
                       </td>
-                      <td className="num text-right text-[12px] text-[var(--ink-secondary)]">
+                      <td className="num whitespace-nowrap text-right text-[12px] text-[var(--ink-secondary)]">
+                        {invite.vendorId && (
+                          <span className="mr-2 inline-block align-[-2px] text-[var(--ink-muted)]" aria-hidden>
+                            <Icon name="chevron-right" size={12} />
+                          </span>
+                        )}
                         {invite.respondedAt
                           ? new Date(invite.respondedAt).toLocaleString("en-IN", {
                               day: "numeric",

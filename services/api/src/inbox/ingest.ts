@@ -248,10 +248,12 @@ export async function responseLedger(rfxId: string) {
     if (m.supplierId && !bySupplier.has(m.supplierId)) bySupplier.set(m.supplierId, m);
   }
 
-  const vendorIds = messages.map((m) => m.vendorId).filter((v): v is string => !!v);
-  const vendors = vendorIds.length
-    ? await prisma.vendor.findMany({ where: { id: { in: vendorIds } } })
-    : [];
+  // Every response on the event, however it arrived. The ledger used to read
+  // only the ones an inbound message created, so a quotation that was uploaded
+  // or imported showed as "replied, no quotation attached" while its 30 prices
+  // sat in the comparison two tabs away. Where the response came from is not
+  // something the buyer asked about.
+  const vendors = await prisma.vendor.findMany({ where: { rfxId } });
 
   const parseAttachments = (raw: string): InboundAttachment[] => {
     try {
@@ -267,6 +269,15 @@ export async function responseLedger(rfxId: string) {
     transport: resolveTransport().describe(),
     invited: invitations.map((invitation) => {
       const reply = bySupplier.get(invitation.supplierId);
+      // The message names the response where one exists; otherwise the supplier
+      // is matched to a response by name, which is how an uploaded or imported
+      // quotation is filed against the supplier who sent it.
+      const vendor =
+        vendors.find((v) => v.id === reply?.vendorId) ??
+        vendors.find((v) => v.name.trim().toLowerCase() === invitation.supplier.name.trim().toLowerCase()) ??
+        null;
+
+      const emailAttachments = reply ? parseAttachments(reply.attachmentsJson).map((a) => a.filename) : [];
       return {
         supplierId: invitation.supplierId,
         name: invitation.supplier.name,
@@ -276,10 +287,16 @@ export async function responseLedger(rfxId: string) {
         respondedAt: invitation.respondedAt,
         responseSubject: invitation.responseSubject,
         snippet: reply?.snippet ?? null,
-        attachments: reply ? parseAttachments(reply.attachmentsJson).map((a) => a.filename) : [],
-        vendorId: reply?.vendorId ?? null,
-        vendorStatus: vendors.find((v) => v.id === reply?.vendorId)?.status ?? null,
-        matchedBy: reply?.matchedBy ?? null,
+        attachments: emailAttachments,
+        vendorId: vendor?.id ?? null,
+        vendorName: vendor?.name ?? null,
+        vendorStatus: vendor?.status ?? null,
+        responseFormat: vendor?.responseFormat ?? null,
+        itemsFound: vendor?.itemsFoundCount ?? null,
+        itemsMissing: vendor?.itemsMissingCount ?? null,
+        /** The document the supplier actually sent, so it can be opened and checked. */
+        documentUrl: vendor ? `/api/vendors/${vendor.id}/file` : null,
+        matchedBy: reply?.matchedBy ?? (vendor ? "uploaded" : null),
       };
     }),
     // Replies from addresses that were never invited. Worth surfacing: the RFx

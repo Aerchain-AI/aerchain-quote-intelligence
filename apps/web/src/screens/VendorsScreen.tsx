@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Icon from "../components/Icon";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button, Card, ErrorState, Spinner, StatusPill } from "../components/ui";
 import { api, type ExceptionCentre, type VendorSummary } from "../lib/api";
 import IngestionDropzone, { type FilePayload } from "../components/IngestionDropzone";
@@ -36,7 +36,14 @@ export default function VendorsScreen({ rfxId }: { rfxId: string }) {
       setRemoving(null);
     }
   };
-  const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
+  // Which response is open lives in the URL rather than in component state, so
+  // the Supplier Replies tab can link straight to one, the back button works,
+  // and a reviewer can paste someone the exact response they are asking about.
+  const { "*": splat } = useParams();
+  const navigate = useNavigate();
+  const selectedVendorId = (splat ?? "").split("/")[0] || null;
+  const setSelectedVendorId = (id: string | null) =>
+    navigate(id ? `/events/${rfxId}/vendors/${id}` : `/events/${rfxId}/vendors`);
 
   const load = () => {
     setError(null);
