@@ -453,7 +453,12 @@ export default function RfxBuilderScreen() {
     }
   }, [promptParam, stage, messages.length, navigate, location.pathname, startClarify]);
 
-  const handleConfirmItemList = (items: DraftLineItem[]) => {
+  /** Drop one of the competing lists without choosing the other yet. */
+  const discardItemOption = useCallback((cardId: string) => {
+    setCanvasCards((prev) => prev.filter((c) => c.id !== cardId));
+  }, []);
+
+  const handleConfirmItemList = (items: DraftLineItem[], cardId?: string) => {
     setConfirmedItems(items);
     setStage("questions");
 
@@ -470,13 +475,17 @@ export default function RfxBuilderScreen() {
       text: `✓ **${items.length} line items confirmed**.${similarEvents.length > 0 ? ` The ${similarEvents.length} past event(s) stay on the canvas for pricing reference.` : ""}\n\nNow let's settle the commercial & delivery terms to finalize your RFx.`,
     });
 
-    // Update canvas cards
+    // Update canvas cards. The lists were alternatives, so the ones not chosen
+    // come off the canvas rather than sitting under the confirmed one looking
+    // like they are still in play.
     setCanvasCards((prev) => [
-      ...prev.map((card) =>
-        card.type === "item-draft"
-          ? { ...card, payload: { ...card.payload, items, isConfirmed: true } }
-          : card,
-      ),
+      ...prev
+        .filter((card) => card.type !== "item-draft" || !cardId || card.id === cardId)
+        .map((card) =>
+          card.type === "item-draft"
+            ? { ...card, payload: { ...card.payload, items, isConfirmed: true } }
+            : card,
+        ),
       { id: nextMsgId(), type: "commercial-terms", payload: clarify },
     ]);
   };
@@ -893,29 +902,41 @@ export default function RfxBuilderScreen() {
 
         setConfirmedItems([]);
         setStage("items_draft");
-        setCanvasCards((prev) =>
-          prev
-            .map((card) =>
-              card.type === "item-draft"
-                ? {
-                    ...card,
-                    // New key: the table seeds its rows once, on mount.
-                    id: nextMsgId(),
-                    payload: {
-                      items,
-                      category: source.category,
-                      isConfirmed: false,
-                      sourceLabel: `Copied from ${source.name}`,
-                    },
-                  }
-                : card,
-            )
+        setCanvasCards((prev) => {
+          // The imported list goes in beside the drafted one, not over it.
+          // Overwriting made the buyer choose before they could compare, and
+          // threw away work they might have wanted back. Two lists on the
+          // canvas is the actual decision: this one, or that one.
+          //
+          // Directly under the last list, not at the foot of the canvas: two
+          // things being compared belong next to each other, not with the
+          // precedent cards in between.
+          const option: CanvasCard = {
+            id: nextMsgId(),
+            type: "item-draft",
+            payload: {
+              items,
+              category: source.category,
+              isConfirmed: false,
+              sourceLabel: `Copied from ${source.name}`,
+              isAlternative: true,
+            },
+          };
+          let lastList = -1;
+          prev.forEach((c, i) => {
+            if (c.type === "item-draft") lastList = i;
+          });
+          const withOption =
+            lastList === -1
+              ? [...prev, option]
+              : [...prev.slice(0, lastList + 1), option, ...prev.slice(lastList + 1)];
+          return withOption
             // The commercial terms and any proposal were settled against the
             // list that has just been replaced, so they no longer describe
             // anything on this canvas. The precedent cards stay: the buyer may
             // want to copy from a different one.
-            .filter((c) => c.type !== "commercial-terms" && c.type !== "draft-preview"),
-        );
+            .filter((c) => c.type !== "commercial-terms" && c.type !== "draft-preview");
+        });
         setDraft(null);
 
         setMessages((prev) => [
@@ -926,8 +947,8 @@ export default function RfxBuilderScreen() {
             type: "ai-text" as const,
             text:
               `✓ Imported ${brought.join(", ")} from **${source.name}**.\n\n` +
-              `Nothing is created yet. Change quantities, specifications, units or terms, ` +
-              `then confirm the list →`,
+              `It is on the canvas as a second list, below the one I drafted, so you can compare them. ` +
+              `Confirm whichever you want — confirming one drops the other.`,
           },
         ]);
       } catch (err) {
@@ -1191,6 +1212,7 @@ export default function RfxBuilderScreen() {
                     toggleAnswer={toggleAnswer}
                     setFreeText={setFreeText}
                     onConfirmItemList={handleConfirmItemList}
+                    onDiscardItemOption={discardItemOption}
                     generateDraft={generateDraft}
                     reset={reset}
                     draft={draft}
@@ -1315,7 +1337,8 @@ interface CanvasRenderContext {
   freeText: Record<string, string>;
   toggleAnswer: (q: ClarifyQuestion, value: string) => void;
   setFreeText: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  onConfirmItemList: (items: DraftLineItem[]) => void;
+  onConfirmItemList: (items: DraftLineItem[], cardId?: string) => void;
+  onDiscardItemOption: (cardId: string) => void;
   generateDraft: () => void;
   reset: () => void;
   draft: RfxDraft | null;
@@ -1346,7 +1369,9 @@ function CanvasCardRenderer(ctx: CanvasRenderContext) {
           category={card.payload.category}
           isConfirmed={card.payload.isConfirmed}
           sourceLabel={card.payload.sourceLabel}
-          onConfirm={ctx.onConfirmItemList}
+          isAlternative={card.payload.isAlternative}
+          onConfirm={(items) => ctx.onConfirmItemList(items, card.id)}
+          onDiscard={() => ctx.onDiscardItemOption(card.id)}
         />
       );
     case "similar-events":
@@ -1445,14 +1470,19 @@ function InteractiveItemDraftCanvas({
   category,
   isConfirmed,
   sourceLabel,
+  isAlternative,
   onConfirm,
+  onDiscard,
 }: {
   initialItems: DraftLineItem[];
   category: string;
   isConfirmed?: boolean;
   /** Set when the list was copied rather than drafted, e.g. from a past event. */
   sourceLabel?: string;
+  /** True when this list sits beside another as a competing option. */
+  isAlternative?: boolean;
   onConfirm: (items: DraftLineItem[]) => void;
+  onDiscard?: () => void;
 }) {
   const [items, setItems] = useState<DraftLineItem[]>(initialItems);
   const [isEditing, setIsEditing] = useState(false);
@@ -1486,6 +1516,16 @@ function InteractiveItemDraftCanvas({
             <p className="text-[13px] font-semibold text-[var(--ink)]">
               Item Specifications — {category}
             </p>
+            {isAlternative && !isConfirmed && (
+              /* Two lists on the canvas are a choice, so each says what it is
+                 rather than leaving the buyer to work out which is which. */
+              <span
+                className="mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                style={{ background: "var(--accent-soft)", color: "var(--ink)", border: "1px solid var(--line)" }}
+              >
+                Alternative list
+              </span>
+            )}
             <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">
               {isConfirmed
                 ? "Line items verified and confirmed"
@@ -1600,12 +1640,20 @@ function InteractiveItemDraftCanvas({
           </span>
         )}
 
+        {!isConfirmed && isAlternative && onDiscard && (
+          <button
+            onClick={onDiscard}
+            className="pressable mr-2 rounded-md border border-[var(--line-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ink-secondary)] hover:text-[var(--critical)]"
+          >
+            Drop this option
+          </button>
+        )}
         {!isConfirmed && (
           <Button
             onClick={() => onConfirm(items)}
             className="!bg-[var(--accent)] hover:!bg-[var(--accent-hover)] !px-5 inline-flex items-center gap-1.5"
           >
-            Confirm Item List <Icon name="arrow-right" size={12} />
+            {isAlternative ? "Confirm this list" : "Confirm Item List"} <Icon name="arrow-right" size={12} />
           </Button>
         )}
       </div>
