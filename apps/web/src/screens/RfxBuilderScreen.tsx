@@ -136,6 +136,39 @@ interface SettledTerm {
   answer: string;
 }
 
+/**
+ * A number of line items the buyer asked for outright.
+ *
+ * Read here rather than left to the model, for two reasons. A count is exact,
+ * so there is no reason to infer it; and the answer has to be checked against
+ * what comes back. Saying "7 line items now on the canvas" to someone who asked
+ * for a different number is worse than saying nothing, because it reads as
+ * confirmation that the instruction was followed.
+ */
+function requestedItemCount(text: string): number | null {
+  const patterns = [
+    /\b(\d{1,3})\s*(?:line\s*)?items?\b/i,
+    /\b(\d{1,3})\s*lines?\b/i,
+    /\b(?:i\s+(?:want|need)|make\s+it|give\s+me|only)\s+(\d{1,3})\b/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+/**
+ * Whether a message is an instruction to this screen rather than a requirement.
+ *
+ * "I need 30 line items" tells the builder how to draft. It is not a condition
+ * of the quote, and it had been going into the requirement summary and out to
+ * every supplier with the invitation, which is nonsense to read at their end.
+ */
+function isBuildInstruction(text: string): boolean {
+  return requestedItemCount(text) != null && text.trim().split(/\s+/).length <= 8;
+}
+
 const CHECK_EL = <Icon name="check" size={13} />;
 
 export default function RfxBuilderScreen() {
@@ -347,13 +380,16 @@ export default function RfxBuilderScreen() {
         ];
       });
 
-      // Push canvas cards to right pane
-      setCanvasCards([
-        {
-          id: nextMsgId(),
-          type: "extraction-summary",
-          payload: result,
-        },
+      // Push canvas cards to right pane.
+      //
+      // Precedent belongs here, beside the list it could change, not after the
+      // list has been confirmed. It used to arrive on confirmation, which is the
+      // one moment it is no use: the buyer has just decided, and the only thing
+      // an item-reuse button can do at that point is undo the decision they made
+      // ten seconds ago. The clarify call already returns both, so showing them
+      // now also costs nothing extra.
+      const cards: CanvasCard[] = [
+        { id: nextMsgId(), type: "extraction-summary", payload: result },
         {
           id: nextMsgId(),
           type: "item-draft",
@@ -363,7 +399,14 @@ export default function RfxBuilderScreen() {
             isConfirmed: false,
           },
         },
-      ]);
+      ];
+      if (result.priorProcurement?.length) {
+        cards.push({ id: nextMsgId(), type: "prior-procurement", payload: result.priorProcurement });
+      }
+      if (result.similar?.length) {
+        cards.push({ id: nextMsgId(), type: "similar-events", payload: result.similar });
+      }
+      setCanvasCards(cards);
     } catch (err) {
       // The drafting assistant failed, but the precedent search did not — it is
       // deterministic and never calls a model. Showing it here means a buyer
@@ -410,65 +453,32 @@ export default function RfxBuilderScreen() {
     }
   }, [promptParam, stage, messages.length, navigate, location.pathname, startClarify]);
 
-  const handleConfirmItemList = async (items: DraftLineItem[]) => {
+  const handleConfirmItemList = (items: DraftLineItem[]) => {
     setConfirmedItems(items);
     setStage("questions");
 
-    // Fetch past events based on confirmed items & category
-    const queryStr = [clarify?.detectedCategory, ...items.map((i) => i.name)].filter(Boolean).join(" ");
-    // Closed procurement matching the request. Fetched alongside the similar
-    // events because it answers a different question: not "can I copy this" but
-    // "what did this cost last time, and who won it".
-    const priorProcurement = await api.findPriorProcurement(queryStr).catch(() => []);
-
-    let similarEvents: SimilarRfx[] = [];
-    try {
-      similarEvents = await api.findSimilarRfx(queryStr);
-    } catch {
-      similarEvents = clarify?.similar ?? [];
-    }
+    // The precedent cards are already on the canvas, put there when the list was
+    // drafted. They are not re-fetched or re-added here; what changes on
+    // confirmation is that they stop offering to replace the list.
+    const similarEvents = clarify?.similar ?? [];
 
     // AI confirmation in left chat
     pushMessage({
       id: nextMsgId(),
       role: "system",
       type: "ai-text",
-      text: `✓ **${items.length} line items confirmed**. ${similarEvents.length > 0 ? `I found ${similarEvents.length} past event(s) that match.` : ""}\n\nNow let's settle the commercial & delivery terms to finalize your RFx.`,
+      text: `✓ **${items.length} line items confirmed**.${similarEvents.length > 0 ? ` The ${similarEvents.length} past event(s) stay on the canvas for pricing reference.` : ""}\n\nNow let's settle the commercial & delivery terms to finalize your RFx.`,
     });
 
     // Update canvas cards
-    setCanvasCards((prev) => {
-      const updated = prev.map((card) => {
-        if (card.type === "item-draft") {
-          return { ...card, payload: { ...card.payload, items, isConfirmed: true } };
-        }
-        return card;
-      });
-
-      if (priorProcurement.length > 0) {
-        updated.push({
-          id: nextMsgId(),
-          type: "prior-procurement",
-          payload: priorProcurement,
-        });
-      }
-
-      if (similarEvents.length > 0) {
-        updated.push({
-          id: nextMsgId(),
-          type: "similar-events",
-          payload: similarEvents,
-        });
-      }
-
-      updated.push({
-        id: nextMsgId(),
-        type: "commercial-terms",
-        payload: clarify,
-      });
-
-      return updated;
-    });
+    setCanvasCards((prev) => [
+      ...prev.map((card) =>
+        card.type === "item-draft"
+          ? { ...card, payload: { ...card.payload, items, isConfirmed: true } }
+          : card,
+      ),
+      { id: nextMsgId(), type: "commercial-terms", payload: clarify },
+    ]);
   };
 
   const toggleAnswer = (q: ClarifyQuestion, value: string) => {
@@ -713,6 +723,23 @@ export default function RfxBuilderScreen() {
    */
   const refineItems = useCallback(
     async (note: string) => {
+      const wanted = requestedItemCount(note);
+
+      // An RFx with nothing in it cannot be sent to anyone. Rather than quietly
+      // drafting some other number and reporting it as done, say why.
+      if (wanted != null && wanted < 1) {
+        pushMessage({
+          id: nextMsgId(),
+          role: "system",
+          type: "ai-text",
+          text:
+            `An RFx needs at least one line item — suppliers cannot quote an empty list, so I have not ` +
+            `changed anything.\n\nIf you want to cut the list down, tell me which items to drop, ` +
+            `or delete rows directly with **Edit Items** on the canvas.`,
+        });
+        return;
+      }
+
       const original = messages.find((m) => m.type === "user-request")?.text ?? request;
       const notes = buyerNotes.includes(note) ? buyerNotes : [...buyerNotes, note];
       const combined = [original, ...notes.map((n) => `Additionally: ${n}`)].filter(Boolean).join("\n\n");
@@ -746,10 +773,17 @@ export default function RfxBuilderScreen() {
             }
             return card;
           });
-          // Anything that followed the item list was built on the old one.
-          return next.filter(
-            (c) => c.type === "extraction-summary" || c.type === "item-draft" || c.type === "prior-procurement",
-          );
+          // Anything that followed the item list was built on the old one. The
+          // precedent cards are rebuilt from the new result rather than kept,
+          // because a different list matches different past events.
+          const kept = next.filter((c) => c.type === "extraction-summary" || c.type === "item-draft");
+          if (result.priorProcurement?.length) {
+            kept.push({ id: nextMsgId(), type: "prior-procurement", payload: result.priorProcurement });
+          }
+          if (result.similar?.length) {
+            kept.push({ id: nextMsgId(), type: "similar-events", payload: result.similar });
+          }
+          return kept;
         });
 
         setMessages((prev) => [
@@ -758,7 +792,13 @@ export default function RfxBuilderScreen() {
             id: nextMsgId(),
             role: "system" as const,
             type: "ai-text" as const,
-            text: `✓ Redrafted the item list around that — **${items.length} line item(s)** now on the canvas.\n\nReview them and confirm when they look right.`,
+            text:
+              `✓ Redrafted the item list around that — **${items.length} line item(s)** now on the canvas.` +
+              (wanted != null && items.length !== wanted
+                ? `\n\nYou asked for **${wanted}**, and the draft came back with **${items.length}**. ` +
+                  `Add or remove rows with **Edit Items** before confirming.`
+                : "") +
+              `\n\nReview them and confirm when they look right.`,
           },
         ]);
       } catch (err) {
@@ -918,8 +958,12 @@ export default function RfxBuilderScreen() {
       });
 
       // Recorded before anything is interpreted, so a sentence carrying two
-      // requirements cannot lose the one this screen has no rule for.
-      setBuyerNotes((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+      // requirements cannot lose the one this screen has no rule for. An
+      // instruction to this screen is not one of them: "I need 30 line items"
+      // is not a condition of anybody's quote.
+      if (!isBuildInstruction(trimmed)) {
+        setBuyerNotes((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+      }
 
       const lower = trimmed.toLowerCase();
 
@@ -1158,6 +1202,7 @@ export default function RfxBuilderScreen() {
                     stage={stage}
                     terms={settledTerms()}
                     onReuseItems={reuseItemsFrom}
+                    itemsLocked={confirmedItems.length > 0}
                     onDraftChange={applyDraftEdit}
                     onTermChange={applyTermEdit}
                     navigate={navigate}
@@ -1282,6 +1327,8 @@ interface CanvasRenderContext {
   stage: Stage;
   terms: SettledTerm[];
   onReuseItems: (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => void;
+  /** True once the buyer has confirmed the list, so items must not be swapped. */
+  itemsLocked: boolean;
   onDraftChange: (next: RfxDraft) => void;
   onTermChange: (key: string, answer: string) => void;
 }
@@ -1307,6 +1354,7 @@ function CanvasCardRenderer(ctx: CanvasRenderContext) {
         <SimilarEventsCanvas
           key={card.id}
           similar={card.payload as SimilarRfx[]}
+          itemsLocked={ctx.itemsLocked}
           onReuse={ctx.onReuseItems}
         />
       );
@@ -1654,9 +1702,11 @@ function PriorProcurementCanvas({ records }: { records: SimilarPastProcurement[]
  */
 function SimilarEventsCanvas({
   similar,
+  itemsLocked,
   onReuse,
 }: {
   similar: SimilarRfx[];
+  itemsLocked: boolean;
   onReuse: (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => void;
 }) {
   return (
@@ -1671,13 +1721,15 @@ function SimilarEventsCanvas({
         <div>
           <p className="text-[13px] font-semibold text-[var(--ink)]">Historical Precedent Match</p>
           <p className="text-[11px] text-[var(--ink-muted)]">
-            Open one to read it in full, then choose what to bring across. Importing creates nothing.
+            {itemsLocked
+              ? "Your item list is confirmed, so these stay here as a pricing reference. Currency and terms can still be brought across."
+              : "Open one to read it in full, then choose what to bring across. Importing creates nothing."}
           </p>
         </div>
       </div>
       <div className="divide-y divide-[var(--line)]">
         {similar.map((s) => (
-          <PrecedentRow key={s.id} source={s} onReuse={onReuse} />
+          <PrecedentRow key={s.id} source={s} itemsLocked={itemsLocked} onReuse={onReuse} />
         ))}
       </div>
     </div>
@@ -1693,16 +1745,18 @@ interface ImportParts {
 
 function PrecedentRow({
   source,
+  itemsLocked,
   onReuse,
 }: {
   source: SimilarRfx;
+  itemsLocked: boolean;
   onReuse: (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<RfxDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [parts, setParts] = useState<ImportParts>({ items: true, currency: true, terms: true });
+  const [parts, setParts] = useState<ImportParts>({ items: !itemsLocked, currency: true, terms: true });
 
   const toggle = async () => {
     if (open) {
@@ -1828,7 +1882,13 @@ function PrecedentRow({
                 <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1.5">
                   {(
                     [
-                      ["items", `Line items (${detail.lineItems?.length ?? 0})`, (detail.lineItems?.length ?? 0) === 0],
+                      [
+                        "items",
+                        itemsLocked
+                          ? "Line items — your list is confirmed"
+                          : `Line items (${detail.lineItems?.length ?? 0})`,
+                        itemsLocked || (detail.lineItems?.length ?? 0) === 0,
+                      ],
                       ["currency", `Currency (${detail.currency})`, false],
                       ["terms", `Commercial terms (${terms.length})`, terms.length === 0],
                     ] as Array<[keyof ImportParts, string, boolean]>
