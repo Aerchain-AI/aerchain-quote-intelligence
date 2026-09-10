@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import AwardChoice from "../components/AwardChoice";
 import { useFigureExplainer } from "../components/ExplainFigure";
 import Icon from "../components/Icon";
 import { Card, CardHeader, ErrorState, Skeleton, StatTile } from "../components/ui";
-import { api, formatInr, type AwardRecommendation } from "../lib/api";
+import { api, formatInr, type AwardOptions, type AwardRecommendation } from "../lib/api";
 
 const STRATEGY_LABELS: Record<AwardRecommendation["strategy"], string> = {
   split_award: "Split award",
@@ -17,12 +18,16 @@ const STRATEGY_LABELS: Record<AwardRecommendation["strategy"], string> = {
  * a recommendation a buyer cannot audit is a recommendation they cannot sign. */
 export default function AwardScreen({ rfxId }: { rfxId: string }) {
   const [data, setData] = useState<AwardRecommendation | null>(null);
+  const [options, setOptions] = useState<AwardOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { explain, panel } = useFigureExplainer(rfxId);
 
   const load = () => {
     setError(null);
     api.getAward(rfxId).then(setData).catch((err) => setError(err.message));
+    // The recommendation and the set of things a buyer may choose instead are
+    // fetched separately: one is the engine's answer, the other is the decision.
+    api.getAwardOptions(rfxId).then(setOptions).catch(() => setOptions(null));
   };
   useEffect(load, [rfxId]);
 
@@ -162,6 +167,8 @@ export default function AwardScreen({ rfxId }: { rfxId: string }) {
           against itself — no language model is involved in any number on this screen.
         </div>
       </Card>
+
+      {options && <AwardChoice rfxId={rfxId} data={options} onDecided={load} />}
 
       <Card>
         <CardHeader title="Why" subtitle="Based on what, exactly" />

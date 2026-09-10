@@ -375,6 +375,61 @@ export interface AccuracyReport {
   basis: string;
 }
 
+export interface AwardOption {
+  vendorId: string;
+  vendorName: string;
+  responseFormat: string;
+  comparableTotal: number | null;
+  ownBasketTotal: number;
+  itemsQuoted: number;
+  itemsMissing: number;
+  deltaVsRecommended: number | null;
+  deltaPct: number | null;
+  qualityStatus: string;
+  qualityHardFailures: string[];
+  qualityUnresolved: number;
+  eligible: boolean;
+  ineligibleReason: string | null;
+  flags: Array<{ label: string; tone: "good" | "warning" | "critical" | "info" }>;
+  supplier: {
+    id: string;
+    verificationStatus: string;
+    city: string | null;
+    paymentTerms: string | null;
+    onTimeDeliveryPct: number | null;
+    awardsOnRecord: number;
+    bidsOnRecord: number;
+    qualityIncidents: number;
+  } | null;
+  outliers: Array<{
+    lineItemId: number;
+    lineItemName: string;
+    evaluatedValue: number;
+    peerMedian: number;
+    multiple: number;
+    reason: string;
+  }>;
+  inRecommendation: boolean;
+  recommendedItemCount: number | null;
+}
+
+export interface AwardOptions {
+  recommendedTotal: number | null;
+  recommendedVendorIds: string[];
+  basketSize: number;
+  totalLineItems: number;
+  options: AwardOption[];
+  decision: {
+    kind: string;
+    vendorIds: string[];
+    vendorNames: string[];
+    reason: string | null;
+    decidedBy: string | null;
+    decidedAt: string;
+    followedRecommendation: boolean;
+  } | null;
+}
+
 export interface SupplierRecord {
   id: string;
   name: string;
@@ -647,6 +702,9 @@ export const api = {
   },
   askCopilot: (rfxId: string, question: string) => post<CopilotAnswer>(`/rfx/${rfxId}/copilot`, { question }),
   getAward: (rfxId: string) => get<AwardRecommendation>(`/rfx/${rfxId}/award`),
+  getAwardOptions: (rfxId: string) => get<AwardOptions>(`/rfx/${rfxId}/award/options`),
+  recordAwardDecision: (rfxId: string, payload: { vendorIds: string[]; reason?: string | null }) =>
+    post<{ kind: string; followedRecommendation: boolean }>(`/rfx/${rfxId}/award/decision`, payload),
   getMetrics: (rfxId: string) => get<ImpactReport>(`/rfx/${rfxId}/metrics`),
   getAccuracy: (rfxId: string) => get<AccuracyReport>(`/rfx/${rfxId}/accuracy`),
   comparisonExportUrl: (rfxId: string) => `${BASE}/rfx/${rfxId}/export/comparison.xlsx`,

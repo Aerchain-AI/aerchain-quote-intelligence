@@ -45,9 +45,42 @@ model Rfx {
   timeline    RfxEvent[]
   invitations RfxInvitation[]
   inbound     InboundMessage[]
+  decision    AwardDecision?
 
   @@index([buyerId])
   @@index([category])
+}
+
+/// What the buyer actually decided.
+///
+/// Separate from the recommendation on purpose. The engine's suggestion is
+/// recomputed from the data every time it is asked for; the decision is a thing
+/// a person did, on a date, for a reason, and it has to survive the numbers
+/// moving underneath it. Keeping them apart is also the only way to answer the
+/// question an auditor asks first: did the buyer follow the recommendation, and
+/// if not, why not.
+model AwardDecision {
+  id    String @id @default(uuid())
+  rfxId String @unique
+
+  /// recommended | override
+  kind            String
+  /// Suppliers the buyer awarded to, as a JSON array of vendor ids.
+  vendorIdsJson   String
+  /// Denormalised names, so the record still reads correctly if a response is
+  /// later removed from the event.
+  vendorNamesJson String
+  /// The engine's own recommendation at the moment of the decision, kept so a
+  /// later reader can see what was overruled rather than inferring it.
+  recommendedJson String
+
+  /// Required on an override. A decision against the computed answer that
+  /// carries no reason is not a decision anyone can defend later.
+  reason    String?
+  decidedBy String?
+  decidedAt DateTime @default(now())
+
+  rfx Rfx @relation(fields: [rfxId], references: [id], onDelete: Cascade)
 }
 
 /// Milestones on a sourcing event. Stored rather than derived at render time so

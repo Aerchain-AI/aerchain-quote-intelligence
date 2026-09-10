@@ -390,6 +390,85 @@ export function splitAward(dataset: ComparisonDataset, constraints: EligibilityC
   };
 }
 
+// ---------------------------------------------------------------- outliers
+
+export interface PriceOutlier {
+  vendorId: string;
+  vendorName: string;
+  lineItemId: number;
+  lineItemName: string;
+  evaluatedValue: number;
+  /** What the rest of the market said for the same line. */
+  peerMedian: number;
+  /** How many times the peer median this price is. */
+  multiple: number;
+  reason: string;
+}
+
+/**
+ * Prices that the rest of the responses contradict.
+ *
+ * Conversion can be faithful and the result still absurd. A vendor whose sheet
+ * says "USD 86" for a box every other supplier quotes at ₹83 produces a
+ * correctly converted ₹7,181, a correctly computed total, and a comparison that
+ * ranks them last without ever saying why. The arithmetic is right and the
+ * screen is misleading.
+ *
+ * So each price is checked against the median of what everyone else quoted for
+ * the same line. An order-of-magnitude gap is not a competitive position, it is
+ * a currency or unit basis that needs a human eye, and it is named as such
+ * rather than silently ranked.
+ *
+ * Deterministic, and it never changes a value — it only says which ones not to
+ * trust.
+ */
+const OUTLIER_MULTIPLE = 5;
+
+export function detectPriceOutliers(dataset: ComparisonDataset): PriceOutlier[] {
+  const outliers: PriceOutlier[] = [];
+
+  for (const li of dataset.lineItems) {
+    const priced = dataset.vendors
+      .map((v) => ({ vendor: v, quote: getQuote(dataset, v.id, li.id) }))
+      .filter((e): e is { vendor: (typeof dataset.vendors)[number]; quote: DatasetQuote } => usable(e.quote));
+
+    // Two quotes cannot establish a norm; one of them would always be the outlier.
+    if (priced.length < 3) continue;
+
+    for (const entry of priced) {
+      const peers = priced.filter((p) => p.vendor.id !== entry.vendor.id).map((p) => p.quote.evaluatedValue!);
+      peers.sort((a, b) => a - b);
+      const mid = Math.floor(peers.length / 2);
+      const peerMedian = peers.length % 2 === 0 ? (peers[mid - 1] + peers[mid]) / 2 : peers[mid];
+      if (peerMedian <= 0) continue;
+
+      const value = entry.quote.evaluatedValue!;
+      const multiple = value / peerMedian;
+      if (multiple < OUTLIER_MULTIPLE && multiple > 1 / OUTLIER_MULTIPLE) continue;
+
+      const dearer = multiple >= OUTLIER_MULTIPLE;
+      const converted = entry.quote.sourceCurrency && entry.quote.sourceCurrency !== dataset.baseCurrency;
+      outliers.push({
+        vendorId: entry.vendor.id,
+        vendorName: entry.vendor.name,
+        lineItemId: li.id,
+        lineItemName: li.name,
+        evaluatedValue: round2(value),
+        peerMedian: round2(peerMedian),
+        multiple: Math.round(multiple * 10) / 10,
+        reason: dearer
+          ? `${Math.round(multiple)}x the median of the other quotes for this line` +
+            (converted
+              ? `. It was quoted in ${entry.quote.sourceCurrency} and converted — check whether the currency on the document is right.`
+              : `. Check the unit basis on the source document before comparing it.`)
+          : `A fraction of what every other vendor quoted for this line. Check the unit basis on the source document.`,
+      });
+    }
+  }
+
+  return outliers;
+}
+
 // ------------------------------------------------------------------- risks
 
 export interface VendorRiskProfile {

@@ -1,6 +1,7 @@
 import type { ComparisonDataset } from "../calc/dataset.js";
 import {
   cheapestOverall,
+  detectPriceOutliers,
   resolveEligibleVendors,
   splitAward,
   summarizeExceptions,
@@ -68,6 +69,25 @@ export function buildAwardRecommendation(dataset: ComparisonDataset): AwardRecom
       (e.type === "low_confidence" || e.type === "ambiguous_value") &&
       // Only on a vendor actually winning that line.
       split.allocations.some((a) => a.vendorId === e.vendorId && a.lineItemIds.includes(e.lineItemId!)),
+  );
+
+  /**
+   * A price the rest of the market contradicts is not a competitive position.
+   *
+   * Deccan's line 2 reads "39.93 INR per 100 pcs" on their document. Extraction
+   * read that correctly and normalisation divided by 100 correctly, and the
+   * result is 40 paise for a box every other supplier prices at ₹42. The
+   * arithmetic is right and awarding on it would be indefensible.
+   *
+   * These are not excluded outright — a bulk price can be real, and dropping a
+   * vendor's line on a heuristic is its own kind of confident wrongness. They
+   * join the list the buyer must verify before awarding, which is the mechanism
+   * that already exists for exactly this: compute it, show it, say what to check.
+   */
+  const outlierBlockers = detectPriceOutliers(dataset).filter(
+    (o) =>
+      awardedLineItemIds.has(o.lineItemId) &&
+      split.allocations.some((a) => a.vendorId === o.vendorId && a.lineItemIds.includes(o.lineItemId)),
   );
 
   const bestSingle: VendorTotal | undefined = overall.ranking.find((r) => r.comparableTotal != null);
@@ -179,12 +199,19 @@ export function buildAwardRecommendation(dataset: ComparisonDataset): AwardRecom
     awardedItemCount: split.awardedItemCount,
     totalLineItems: dataset.lineItems.length,
     qualityQualifiedVendorCount,
-    provisional: blockingFlags.length > 0,
-    blockingVerifications: blockingFlags.map((e) => ({
-      lineItemId: e.lineItemId!,
-      vendorName: dataset.vendors.find((v) => v.id === e.vendorId)?.name ?? "Unknown vendor",
-      reason: e.message,
-    })),
+    provisional: blockingFlags.length > 0 || outlierBlockers.length > 0,
+    blockingVerifications: [
+      ...blockingFlags.map((e) => ({
+        lineItemId: e.lineItemId!,
+        vendorName: dataset.vendors.find((v) => v.id === e.vendorId)?.name ?? "Unknown vendor",
+        reason: e.message,
+      })),
+      ...outlierBlockers.map((o) => ({
+        lineItemId: o.lineItemId,
+        vendorName: o.vendorName,
+        reason: `${o.lineItemName} is priced at ₹${o.evaluatedValue.toLocaleString("en-IN")} against a market median of ₹${o.peerMedian.toLocaleString("en-IN")}. ${o.reason}`,
+      })),
+    ],
     vendorsWithUnresolvedQuality: eligibility.flagged,
     itemsRequiringReview: split.unawardedItems.length,
     evidence,

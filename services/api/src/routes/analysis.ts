@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../db.js";
+import { buildAwardOptions, recordAwardDecision } from "../award/options.js";
 import { buildAwardRecommendation } from "../award/recommend.js";
 import { loadComparisonDataset } from "../calc/dataset.js";
 import { EXPLAINABLE_FIGURES, explainFigure } from "../calc/derivation.js";
@@ -113,6 +114,36 @@ analysisRouter.get("/rfx/:id/explain/:figure", async (req, res) => {
     });
   }
   res.json(derivation);
+});
+
+/**
+ * Every vendor the buyer could award to, and what they decided.
+ *
+ * The recommendation is the engine's answer. This is the set the buyer chooses
+ * from, because a screen that only shows the computed answer has quietly made
+ * the engine the decider.
+ */
+analysisRouter.get("/rfx/:id/award/options", async (req, res) => {
+  try {
+    const dataset = await loadComparisonDataset(req.params.id);
+    res.json(await buildAwardOptions(dataset));
+  } catch (err) {
+    res.status(404).json({ error: "Could not build the award options.", detail: (err as Error).message });
+  }
+});
+
+analysisRouter.post("/rfx/:id/award/decision", async (req, res) => {
+  const vendorIds: string[] = Array.isArray(req.body?.vendorIds) ? req.body.vendorIds.map(String) : [];
+  try {
+    const result = await recordAwardDecision(req.params.id, {
+      vendorIds,
+      reason: req.body?.reason ?? null,
+      decidedBy: req.body?.decidedBy ?? null,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
 });
 
 // PRD §18 — exception centre.
