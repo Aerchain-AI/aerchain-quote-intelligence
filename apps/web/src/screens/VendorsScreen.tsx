@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Icon from "../components/Icon";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button, Card, ErrorState, Spinner, StatusPill } from "../components/ui";
@@ -17,6 +17,34 @@ const FORMAT_LABELS: Record<string, string> = {
 /** PRD §13 — vendor response status. Five different formats, one status view. */
 const CHECK_EL = <Icon name="check" size={13} />;
 
+/**
+ * One response waiting its turn.
+ *
+ * Uploading and extracting are separate steps and only the second can fail in
+ * an interesting way, so they are tracked separately: a file that reached the
+ * server is not lost when the model cannot read it, and the retry starts from
+ * extraction rather than sending the bytes again.
+ */
+interface QueueItem {
+  key: string;
+  payload: FilePayload;
+  vendorId: string | null;
+  status: "waiting" | "uploading" | "extracting" | "done" | "failed";
+  attempts: number;
+  error: string | null;
+}
+
+/**
+ * Three goes at each file, the first two without pausing.
+ *
+ * Extraction fails almost entirely on transient upstream errors, and the key
+ * pool has already tried every key by the time it gives up, so an immediate
+ * second attempt costs a second and often works. The pause before the last one
+ * is there so a genuine outage is not hammered by a queue of five files.
+ */
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = [0, 0, 4000];
+
 export default function VendorsScreen({
   rfxId,
   onVendorsChanged,
@@ -31,6 +59,14 @@ export default function VendorsScreen({
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+
+  // The queue is held in a ref and mirrored into state for rendering. The loop
+  // that drains it needs to see writes immediately, and React state does not
+  // give it that inside a single pass.
+  const queueRef = useRef<QueueItem[]>([]);
+  const [queueView, setQueueView] = useState<QueueItem[]>([]);
+  const drainingRef = useRef(false);
+  const syncQueue = () => setQueueView([...queueRef.current]);
 
   const removeResponse = async (vendorId: string, vendorName: string) => {
     if (!window.confirm(`Remove ${vendorName}'s response? Its quotes, exceptions and questionnaire go with it.`)) return;
@@ -68,22 +104,100 @@ export default function VendorsScreen({
   };
   useEffect(load, [rfxId]);
 
-  const handleUpload = async (payload: FilePayload) => {
-    try {
-      // 1. Create the pending vendor
-      const newVendor = await api.addVendor(rfxId, payload);
-      // 2. Add it to the top of the list
-      setVendors((prev) => (prev ? [newVendor, ...prev] : [newVendor]));
-      // 3. The response now exists, so tell the workspace before extraction is
-      //    attempted. A quotation that the model could not read is still a
-      //    quotation, and gating the Comparison tab on the model succeeding
-      //    meant an upstream outage locked the buyer out of their own data.
-      onVendorsChanged?.();
-      // 4. Then extract it.
-      await reprocess(newVendor.id);
-    } catch (err) {
-      setError((err as Error).message);
+  /**
+   * Take one file as far as it will go, retrying extraction on failure.
+   *
+   * Upload and extraction are attempted separately so a file that is on the
+   * server is not re-sent when only the model failed.
+   */
+  const runItem = async (item: QueueItem) => {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      item.attempts = attempt;
+      item.error = null;
+      try {
+        if (!item.vendorId) {
+          item.status = "uploading";
+          syncQueue();
+          const created = await api.addVendor(rfxId, item.payload);
+          item.vendorId = created.id;
+          setVendors((prev) => (prev ? [created, ...prev] : [created]));
+          // The response exists now, so the workspace is told before extraction
+          // is attempted. A quotation the model could not read is still a
+          // quotation, and gating the Comparison tab on the model succeeding
+          // locked the buyer out of their own data during an outage.
+          onVendorsChanged?.();
+        }
+
+        item.status = "extracting";
+        syncQueue();
+        await api.processVendor(rfxId, item.vendorId);
+
+        item.status = "done";
+        syncQueue();
+        return;
+      } catch (err) {
+        item.error = (err as Error).message;
+        if (attempt === MAX_ATTEMPTS) {
+          item.status = "failed";
+          syncQueue();
+          return;
+        }
+        item.status = "waiting";
+        syncQueue();
+        const wait = RETRY_DELAY_MS[attempt] ?? 0;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
     }
+  };
+
+  /** One at a time, on purpose: five extractions at once is how a rate limit is hit. */
+  const drainQueue = useCallback(async () => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    try {
+      for (;;) {
+        const next = queueRef.current.find((i) => i.status === "waiting" && i.attempts === 0);
+        if (!next) break;
+        await runItem(next);
+        load();
+      }
+    } finally {
+      drainingRef.current = false;
+      syncQueue();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rfxId]);
+
+  const handleUpload = (payloads: FilePayload[]) => {
+    queueRef.current = [
+      ...queueRef.current,
+      ...payloads.map((payload, i) => ({
+        key: `${Date.now()}-${i}-${payload.name}`,
+        payload,
+        vendorId: null,
+        status: "waiting" as const,
+        attempts: 0,
+        error: null,
+      })),
+    ];
+    syncQueue();
+    void drainQueue();
+  };
+
+  /** A file that used up its three attempts, sent round again by hand. */
+  const retryQueued = (key: string) => {
+    const item = queueRef.current.find((i) => i.key === key);
+    if (!item) return;
+    item.status = "waiting";
+    item.attempts = 0;
+    item.error = null;
+    syncQueue();
+    void drainQueue();
+  };
+
+  const clearFinishedQueue = () => {
+    queueRef.current = queueRef.current.filter((i) => i.status !== "done");
+    syncQueue();
   };
 
   const reprocess = async (vendorId: string) => {
@@ -112,7 +226,9 @@ export default function VendorsScreen({
 
   return (
     <div className="space-y-4">
-      <IngestionDropzone onUpload={handleUpload} />
+      <IngestionDropzone onUpload={handleUpload} busy={queueView.some((i) => i.status !== "done")} />
+
+      <UploadQueue items={queueView} onRetry={retryQueued} onClearDone={clearFinishedQueue} />
 
       <p className="text-[13px] text-[var(--ink-secondary)]">
         {vendors.length} vendors responded in {new Set(vendors.map((v) => v.responseFormat)).size} different formats.
@@ -278,6 +394,96 @@ function PipelineAnimation() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * What is in the queue and how it is going.
+ *
+ * A buyer who drops five files is owed a per-file account of what happened, not
+ * a spinner. A failure names its reason and offers another go: extraction fails
+ * on transient upstream errors more often than on anything about the document,
+ * and a file that failed at nine o'clock usually reads fine at ten.
+ */
+function UploadQueue({
+  items,
+  onRetry,
+  onClearDone,
+}: {
+  items: QueueItem[];
+  onRetry: (key: string) => void;
+  onClearDone: () => void;
+}) {
+  if (items.length === 0) return null;
+
+  const done = items.filter((i) => i.status === "done").length;
+  const failed = items.filter((i) => i.status === "failed").length;
+  const pending = items.length - done - failed;
+
+  const label: Record<QueueItem["status"], string> = {
+    waiting: "Waiting",
+    uploading: "Uploading",
+    extracting: "Extracting",
+    done: "Extracted",
+    failed: "Failed",
+  };
+  const tone: Record<QueueItem["status"], string> = {
+    waiting: "var(--ink-muted)",
+    uploading: "var(--info)",
+    extracting: "var(--info)",
+    done: "var(--good)",
+    failed: "var(--critical)",
+  };
+
+  return (
+    <div className="mb-4 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--surface-sunken)] px-5 py-2.5">
+        <div>
+          <p className="text-[13px] font-semibold text-[var(--ink)]">Upload queue</p>
+          <p className="mt-0.5 text-[11.5px] text-[var(--ink-muted)]">
+            One at a time, in order. {done} extracted
+            {pending > 0 ? `, ${pending} to go` : ""}
+            {failed > 0 ? `, ${failed} failed` : ""}.
+          </p>
+        </div>
+        {done > 0 && (
+          <button
+            onClick={onClearDone}
+            className="pressable rounded-md px-2 py-1 text-[11.5px] font-medium text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+          >
+            Clear finished
+          </button>
+        )}
+      </div>
+      <ul className="divide-y divide-[var(--line)]">
+        {items.map((item) => (
+          <li key={item.key} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-5 py-2.5">
+            <div className="min-w-0">
+              <p className="truncate text-[12.5px] font-medium text-[var(--ink)]">{item.payload.name}</p>
+              {item.error && (
+                <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--critical)" }}>
+                  {item.error}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <span className="text-[11.5px] font-medium" style={{ color: tone[item.status] }}>
+                {label[item.status]}
+                {item.status !== "done" && item.attempts > 1 ? ` · attempt ${item.attempts} of ${MAX_ATTEMPTS}` : ""}
+              </span>
+              {item.status === "failed" && (
+                <button
+                  onClick={() => onRetry(item.key)}
+                  className="pressable rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+                >
+                  Try again
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -9,11 +9,27 @@ export interface FilePayload {
   textContent?: string;
 }
 
-export default function IngestionDropzone({ onUpload }: { onUpload: (payload: FilePayload) => void }) {
+/**
+ * Where vendor responses come in.
+ *
+ * It took one file at a time, which is not how quotations arrive: a buyer
+ * closing an RFx has five replies sitting in a folder and wants them all in.
+ * Dropping several used to silently ingest the first and discard the rest,
+ * which is the worst of the three possible behaviours.
+ */
+export default function IngestionDropzone({
+  onUpload,
+  busy,
+}: {
+  onUpload: (payloads: FilePayload[]) => void;
+  /** True while the queue is working, so the zone can say so. */
+  busy?: boolean;
+}) {
   const [activeTab, setActiveTab] = useState<"file" | "text">("file");
   const [isDragging, setIsDragging] = useState(false);
   const [text, setText] = useState("");
   const [vendorName, setVendorName] = useState("");
+  const [rejected, setRejected] = useState<string[]>([]);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -32,38 +48,56 @@ export default function IngestionDropzone({ onUpload }: { onUpload: (payload: Fi
     setIsDragging(false);
   }, []);
 
-  const processFile = (file: File) => {
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-    const formatMap: Record<string, string> = {
-      xlsx: "xlsx",
-      pdf: "pdf",
-      docx: "docx",
-      png: "jpg", // backend supports jpg/png as image
-      jpg: "jpg",
-      jpeg: "jpg",
-    };
-    const format = formatMap[ext];
-    
-    if (!format) {
-      alert(`Unsupported file format: ${ext}`);
-      return;
-    }
+  const FORMATS: Record<string, string> = {
+    xlsx: "xlsx",
+    pdf: "pdf",
+    docx: "docx",
+    png: "jpg", // the backend treats png and jpg alike
+    jpg: "jpg",
+    jpeg: "jpg",
+  };
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string;
-      // split base64 part
-      const base64 = dataUrl.split(",")[1];
-      if (base64) {
-        onUpload({
-          name: vendorName || file.name.replace(/\.[^/.]+$/, ""),
-          responseFormat: format,
-          fileBase64: base64,
-        });
-        setVendorName("");
+  const readOne = (file: File, useTypedName: boolean): Promise<FilePayload | null> =>
+    new Promise((resolve) => {
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      const format = FORMATS[ext];
+      if (!format) {
+        resolve(null);
+        return;
       }
-    };
-    reader.readAsDataURL(file);
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onload = (e) => {
+        const base64 = (e.target?.result as string).split(",")[1];
+        resolve(
+          base64
+            ? {
+                // One typed name cannot describe five files, so it is only used
+                // when there is exactly one. Otherwise each file names itself.
+                name: (useTypedName && vendorName) || file.name.replace(/\.[^/.]+$/, ""),
+                responseFormat: format,
+                fileBase64: base64,
+              }
+            : null,
+        );
+      };
+      reader.readAsDataURL(file);
+    });
+
+  const processFiles = async (files: FileList) => {
+    const list = Array.from(files);
+    const useTypedName = list.length === 1;
+    const results = await Promise.all(list.map((f) => readOne(f, useTypedName)));
+
+    // Named rather than counted: a buyer who dropped a folder needs to know
+    // which file did not go in, not that "1 file was skipped".
+    setRejected(list.filter((_, i) => results[i] == null).map((f) => f.name));
+
+    const payloads = results.filter((r): r is FilePayload => r != null);
+    if (payloads.length > 0) {
+      onUpload(payloads);
+      setVendorName("");
+    }
   };
 
   const handleDrop = useCallback(
@@ -72,7 +106,7 @@ export default function IngestionDropzone({ onUpload }: { onUpload: (payload: Fi
       e.stopPropagation();
       setIsDragging(false);
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        processFile(e.dataTransfer.files[0]);
+        void processFiles(e.dataTransfer.files);
         e.dataTransfer.clearData();
       }
     },
@@ -81,17 +115,22 @@ export default function IngestionDropzone({ onUpload }: { onUpload: (payload: Fi
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFile(e.target.files[0]);
+      void processFiles(e.target.files);
+      // Cleared so the same file can be picked twice in a row, which otherwise
+      // fires no change event and looks like the upload was ignored.
+      e.target.value = "";
     }
   };
 
   const handleTextSubmit = () => {
     if (!text.trim()) return;
-    onUpload({
-      name: vendorName || "Pasted Text Response",
-      responseFormat: "txt",
-      textContent: text,
-    });
+    onUpload([
+      {
+        name: vendorName || "Pasted Text Response",
+        responseFormat: "txt",
+        textContent: text,
+      },
+    ]);
     setText("");
     setVendorName("");
   };
@@ -128,7 +167,7 @@ export default function IngestionDropzone({ onUpload }: { onUpload: (payload: Fi
       <div className="p-5">
         <div className="mb-4 max-w-sm">
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-muted)] mb-1.5">
-            Vendor Name (Optional)
+            Vendor Name (Optional, single file only)
           </label>
           <input
             type="text"
@@ -154,6 +193,7 @@ export default function IngestionDropzone({ onUpload }: { onUpload: (payload: Fi
             <input
               type="file"
               id="file-upload"
+              multiple
               className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
               onChange={handleFileSelect}
               accept=".xlsx,.pdf,.docx,.png,.jpg,.jpeg"
@@ -166,13 +206,20 @@ export default function IngestionDropzone({ onUpload }: { onUpload: (payload: Fi
                 <Icon name="document" size={19} />
               </span>
               <p className="text-[13px] font-medium text-[var(--ink-secondary)]">
-                Drag and drop a quote file here
+                {busy ? "Add more — they join the queue" : "Drag and drop quote files here"}
               </p>
               <p className="mt-1 text-[11px] text-[var(--ink-muted)]">
-                Supports .xlsx, .pdf, .docx, .png, .jpg
+                Several at once is fine. Supports .xlsx, .pdf, .docx, .png, .jpg
               </p>
             </div>
           </div>
+        )}
+
+        {rejected.length > 0 && (
+          <p className="mb-3 text-[12px]" style={{ color: "var(--critical)" }}>
+            Not a supported format, so {rejected.length === 1 ? "it was" : "these were"} left out:{" "}
+            {rejected.join(", ")}
+          </p>
         )}
 
         {activeTab === "text" && (
