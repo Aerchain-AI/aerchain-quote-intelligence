@@ -131,7 +131,7 @@ describe("buildComparableBasket", () => {
     const c = basket.totals.find((t) => t.vendorId === "c")!;
     // C priced item 1 only: 8 × 100 = 800. Item 2 must not contribute 0.
     expect(c.ownBasketTotal).toBe(800);
-    expect(c.itemsMissing).toBe(1);
+    expect(c.itemsWithoutComparablePrice).toBe(1);
   });
 
   it("gives a comparable total only to vendors covering the whole basket", () => {

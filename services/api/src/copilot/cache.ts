@@ -13,12 +13,25 @@ import type { CopilotAnswer } from "./answer.js";
  * free-tier quota holding up mid-question.
  */
 
-/** Changes whenever any vendor's extraction is re-run. */
+/**
+ * Bumped by hand when the shape or meaning of a calculation changes.
+ *
+ * The data version alone was not enough. Fixing how a number is computed leaves
+ * every vendor's extraction untouched, so a cached answer written before the fix
+ * kept being served after it — the copilot went on repeating a defect that had
+ * already been corrected, which is worse than not caching at all.
+ */
+const CALC_CONTRACT_VERSION = "12";
+
+/** Changes whenever any vendor's extraction is re-run, or the maths changes. */
 export function dataVersionFor(dataset: ComparisonDataset): string {
   const parts = dataset.vendors
     .map((v) => `${v.id}:${v.status}:${v.itemsFoundCount ?? "-"}:${v.overallConfidence ?? "-"}:${v.processingMs ?? "-"}`)
     .sort();
-  return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update([CALC_CONTRACT_VERSION, ...parts].join("|"))
+    .digest("hex")
+    .slice(0, 16);
 }
 
 /** Normalised so "Who is cheapest overall?" and "who is cheapest overall" hit the same entry. */

@@ -91,6 +91,7 @@ export const EXCEPTION_LABELS: Record<ExceptionType, string> = {
   discount: "Discount applies",
   moq: "Minimum order quantity concern",
   lead_time_concern: "Lead-time concern",
-  quality_failure: "Failed a quality questionnaire criterion",
+  quality_failure: "Answered no to a quality questionnaire criterion",
+  quality_unresolved: "Quality questionnaire left unanswered — unknown, not failed",
   ambiguous_value: "Ambiguous or illegible value",
 };

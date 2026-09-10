@@ -307,7 +307,12 @@ export interface ExceptionCentre {
     total: number;
     byType: Array<{ type: string; count: number; severity: string }>;
     bySeverity: Array<{ severity: string; count: number }>;
-    vendorsWithIncompleteResponses: Array<{ vendorId: string; vendorName: string; itemsMissing: number }>;
+    vendorsWithIncompleteResponses: Array<{
+      vendorId: string;
+      vendorName: string;
+      itemsNotQuoted: number;
+      itemsNotComparable: number;
+    }>;
   };
   exceptions: QuoteException[];
 }
@@ -382,7 +387,7 @@ export interface AwardOption {
   comparableTotal: number | null;
   ownBasketTotal: number;
   itemsQuoted: number;
-  itemsMissing: number;
+  itemsWithoutComparablePrice: number;
   deltaVsRecommended: number | null;
   deltaPct: number | null;
   qualityStatus: string;

@@ -112,6 +112,7 @@ export type ExceptionType =
   | "moq"
   | "lead_time_concern"
   | "quality_failure"
+  | "quality_unresolved"
   | "ambiguous_value";
 
 export type ExceptionSeverity = "info" | "warning" | "critical";

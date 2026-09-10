@@ -120,9 +120,16 @@ export function buildAwardRecommendation(dataset: ComparisonDataset): AwardRecom
     reviewBeforeAward.push(`Item #${unawarded.lineItemId} (${unawarded.name}) — ${unawarded.reason}`);
   }
   for (const vendorGap of exceptionSummary.vendorsWithIncompleteResponses) {
-    reviewBeforeAward.push(
-      `${vendorGap.vendorName} left ${vendorGap.itemsMissing} item(s) unpriced — confirm whether they can supply them before relying on this split.`,
-    );
+    if (vendorGap.itemsNotQuoted > 0) {
+      reviewBeforeAward.push(
+        `${vendorGap.vendorName} left ${vendorGap.itemsNotQuoted} item(s) unpriced — confirm whether they can supply them before relying on this split.`,
+      );
+    }
+    if (vendorGap.itemsNotComparable > 0) {
+      reviewBeforeAward.push(
+        `${vendorGap.vendorName} priced ${vendorGap.itemsNotComparable} item(s) on a basis that could not be converted — confirm what the price covers before comparing it.`,
+      );
+    }
   }
   for (const flaggedVendor of eligibility.flagged) {
     reviewBeforeAward.push(

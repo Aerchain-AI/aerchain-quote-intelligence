@@ -24,7 +24,7 @@ interface VendorTotalish {
   comparableTotal: number | null;
   ownBasketTotal: number;
   itemsQuoted: number;
-  itemsMissing: number;
+  itemsWithoutComparablePrice: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -61,7 +61,7 @@ export default function AnalysisChart({ answer }: { answer: CopilotAnswer }) {
         value: r.comparableTotal!,
         display: formatInr(r.comparableTotal),
         highlight: i === 0,
-        note: `${r.itemsQuoted} of ${r.itemsQuoted + r.itemsMissing} items quoted`,
+        note: `${r.itemsQuoted} of ${r.itemsQuoted + r.itemsWithoutComparablePrice} items comparable`,
       }));
 
       // Vendors with gaps cannot be ranked here at all, so they are named rather
@@ -77,7 +77,7 @@ export default function AnalysisChart({ answer }: { answer: CopilotAnswer }) {
           <BarChart data={data} />
           {excluded.length > 0 && (
             <p className="mt-2.5 text-[11px] leading-relaxed text-[var(--ink-muted)]">
-              Not ranked: {excluded.map((r) => `${r.vendorName} (${r.itemsMissing} items unpriced)`).join(", ")}.
+              Not ranked: {excluded.map((r) => `${r.vendorName} (${r.itemsWithoutComparablePrice} items without a comparable price)`).join(", ")}.
               Drawing them on this scale would make an incomplete response look cheapest.
             </p>
           )}
@@ -88,7 +88,7 @@ export default function AnalysisChart({ answer }: { answer: CopilotAnswer }) {
                 r.vendorName,
                 r.comparableTotal == null ? "Not comparable" : formatInr(r.comparableTotal),
                 String(r.itemsQuoted),
-                String(r.itemsMissing),
+                String(r.itemsWithoutComparablePrice),
               ])}
             />
           )}
@@ -154,24 +154,38 @@ export default function AnalysisChart({ answer }: { answer: CopilotAnswer }) {
     // ------------------------------------------------------ response coverage
     case "incomplete_responses": {
       const gaps =
-        (calc.vendorsWithIncompleteResponses as Array<{ vendorName: string; itemsMissing: number }> | undefined) ?? [];
+        (calc.vendorsWithIncompleteResponses as
+          | Array<{ vendorName: string; itemsNotQuoted: number; itemsNotComparable: number }>
+          | undefined) ?? [];
       const byType = (calc.byType as Array<{ type: string; count: number }> | undefined) ?? [];
       if (gaps.length === 0 && byType.length === 0) return null;
 
       return (
         <ChartFrame
           title="Where the responses are incomplete"
-          caption="Unpriced items counted, not inferred. A gap is missing information, never a price of zero."
+          caption="Counted, not inferred. A gap is missing information, never a price of zero — and a price quoted on a basis we could not convert is shown as its own bar, because chasing it is different work."
           action={toggle}
         >
           {gaps.length > 0 && (
             <BarChart
-              data={gaps.map((g) => ({
-                label: g.vendorName,
-                value: g.itemsMissing,
-                display: `${g.itemsMissing} unpriced`,
-                incomplete: true,
-              }))}
+              data={gaps.flatMap((g) => [
+                ...(g.itemsNotQuoted > 0
+                  ? [{
+                      label: g.vendorName,
+                      value: g.itemsNotQuoted,
+                      display: `${g.itemsNotQuoted} not quoted`,
+                      incomplete: true,
+                    }]
+                  : []),
+                ...(g.itemsNotComparable > 0
+                  ? [{
+                      label: `${g.vendorName} (unit basis)`,
+                      value: g.itemsNotComparable,
+                      display: `${g.itemsNotComparable} not comparable`,
+                      incomplete: true,
+                    }]
+                  : []),
+              ])}
             />
           )}
           {showTable && byType.length > 0 && (

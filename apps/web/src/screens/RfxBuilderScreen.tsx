@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Icon from "../components/Icon";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button, ErrorState, Spinner } from "../components/ui";
+import { ChatComposer, PaneResizer, usePaneWidth } from "../components/ChatComposer";
 import { useGlobalChat } from "../lib/ChatContext";
 import { getSession } from "../lib/auth";
 import {
@@ -66,6 +67,10 @@ interface PersistedState {
   draft: RfxDraft | null;
   messages: ChatMessage[];
   canvasCards: CanvasCard[];
+  /** Statements the buyer typed into the chat, kept verbatim. */
+  buyerNotes: string[];
+  /** Terms the buyer rewrote by hand in the preview, keyed by term. */
+  termOverrides: Record<string, string>;
 }
 
 function loadPersisted(): PersistedState | null {
@@ -99,12 +104,31 @@ function clearPersisted(): void {
   } catch { /* no-op */ }
 }
 
+/** A condition of the quote, with the handle the preview edits it by. */
+interface SettledTerm {
+  key: string;
+  question: string;
+  answer: string;
+}
+
 const CHECK_EL = <Icon name="check" size={13} />;
 
 export default function RfxBuilderScreen() {
   const navigate = useNavigate();
   const location = useLocation();
   const { registerWorkspaceHandler, setChatInput } = useGlobalChat();
+
+  // The conversation column is the reader's to size, the same way the copilot
+  // rail is. A long clarification thread and a ten-column item table want very
+  // different splits, and neither is right for everyone.
+  const pane = usePaneWidth({
+    key: "aerchain.builderPaneWidth",
+    cssVar: "--builder-pane",
+    initial: 460,
+    min: 320,
+    max: 760,
+    reserve: 240 + 480,
+  });
 
   // Buyers
   const [buyers, setBuyers] = useState<Buyer[]>([]);
@@ -134,6 +158,19 @@ export default function RfxBuilderScreen() {
   const [answers, setAnswers] = useState<Record<string, string[]>>(restored?.answers ?? {});
   const [freeText, setFreeText] = useState<Record<string, string>>(restored?.freeText ?? {});
   const [draft, setDraft] = useState<RfxDraft | null>(restored?.draft ?? null);
+
+  // Everything the buyer said in the chat that is not one of the structured
+  // questions. "It should be from Mumbai" used to be swallowed: the screen
+  // recognised the currency in the same sentence, acted on it, and dropped the
+  // rest. A requirement this screen cannot parse is still a requirement, so it
+  // is kept word for word and carried into the summary and the invitation.
+  const [buyerNotes, setBuyerNotes] = useState<string[]>(restored?.buyerNotes ?? []);
+
+  // A term the buyer corrected by hand in the preview wins over the answer that
+  // produced it. Emptying one removes it rather than sending a blank condition.
+  const [termOverrides, setTermOverrides] = useState<Record<string, string>>(
+    restored?.termOverrides ?? {},
+  );
   const [stageError, setStageError] = useState<string | null>(null);
 
   // Chat messages (left pane)
@@ -159,6 +196,8 @@ export default function RfxBuilderScreen() {
       setDraft(null);
       setMessages([]);
       setCanvasCards([]);
+      setBuyerNotes([]);
+      setTermOverrides({});
       autoExecutedRef.current = false;
       // Strip fresh param but keep prompt param
       if (promptParam) {
@@ -197,8 +236,8 @@ export default function RfxBuilderScreen() {
       clearPersisted();
       return;
     }
-    savePersisted({ request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards });
-  }, [request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards]);
+    savePersisted({ request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards, buyerNotes, termOverrides });
+  }, [request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards, buyerNotes, termOverrides]);
 
   const activeBuyer = useMemo(
     () => buyers.find((b) => b.id === activeBuyerId) ?? null,
@@ -397,6 +436,55 @@ export default function RfxBuilderScreen() {
       return { question: q.question, answer: [picked, typed].filter(Boolean).join(" — ") || "Not specified" };
     });
 
+  /**
+   * Every term the buyer has settled, in one list.
+   *
+   * The answers to the structured questions and the sentences typed into the
+   * chat are the same kind of thing to a supplier — conditions of the quote —
+   * so they travel together. "Not specified" is dropped rather than padded into
+   * the invitation, which would read as a requirement when it is an absence.
+   */
+  const settledTerms = useCallback(
+    (): SettledTerm[] =>
+      [
+        ...buildAnswers(),
+        ...buyerNotes.map((note) => ({ question: "Stated by you", answer: note })),
+      ]
+        .map((t, i) => {
+          const key = `${i}:${t.question}`;
+          return { key, question: t.question, answer: termOverrides[key] ?? t.answer };
+        })
+        .filter(
+          (t) => t.answer && t.answer.trim() && t.answer.trim().toLowerCase() !== "not specified",
+        ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [answers, freeText, clarify, buyerNotes, termOverrides],
+  );
+
+  /**
+   * A hand edit in the preview, applied to the draft and to the card showing it.
+   *
+   * Both are updated together because the card holds its own copy of the payload;
+   * changing one and not the other is how a preview starts telling a different
+   * story from what gets created.
+   */
+  const applyDraftEdit = useCallback((next: RfxDraft) => {
+    setDraft(next);
+    setCanvasCards((prev) =>
+      prev.map((card) => (card.type === "draft-preview" ? { ...card, payload: next } : card)),
+    );
+  }, []);
+
+  const applyTermEdit = useCallback((key: string, answer: string) => {
+    setTermOverrides((prev) => ({ ...prev, [key]: answer }));
+  }, []);
+
+  /** The same terms, shaped for the API — the edit key is a screen concern. */
+  const termsForApi = useCallback(
+    () => settledTerms().map(({ question, answer }) => ({ question, answer })),
+    [settledTerms],
+  );
+
   const generateDraft = async () => {
     setStage("drafting");
     setStageError(null);
@@ -406,7 +494,7 @@ export default function RfxBuilderScreen() {
 
     try {
       const sourceText = messages.find((m) => m.type === "user-request")?.text ?? "";
-      const result = await api.draftRfx(sourceText, confirmedItems.length, buildAnswers());
+      const result = await api.draftRfx(sourceText, confirmedItems.length, termsForApi());
 
       if (confirmedItems.length > 0) {
         result.lineItems = confirmedItems;
@@ -465,7 +553,7 @@ export default function RfxBuilderScreen() {
         lineItems: draft.lineItems,
         buyerId: activeBuyerId,
         sourceRequest,
-        clarifications: buildAnswers(),
+        clarifications: termsForApi(),
       });
       clearPersisted();
       navigate(`/events/${result.id}/overview`);
@@ -485,8 +573,73 @@ export default function RfxBuilderScreen() {
     setRequest("");
     setMessages([]);
     setCanvasCards([]);
+    setBuyerNotes([]);
+    setTermOverrides({});
     clearPersisted();
   };
+
+  /**
+   * Rebuild the proposal around something the buyer changed after it was drafted.
+   *
+   * This screen used to answer a post-draft message with a regular expression:
+   * it looked for a currency and, finding none, filed the sentence as a note. No
+   * model was involved, which is why "change Mumbai to Hyderabad" came back
+   * quoted rather than applied — the name, the scope and the assumptions were
+   * still the ones written before the buyer said it. A refinement now goes back
+   * through the drafting model with every settled term attached, so the
+   * proposal is rewritten around it.
+   *
+   * Two things are held fixed across the rewrite. The line items the buyer
+   * already confirmed are not re-invented, and a currency stated in plain words
+   * is applied here rather than left to the model, because it is exact and a
+   * quote in the wrong currency is not a small error.
+   */
+  const redraftWith = useCallback(
+    async (note: string, currencyOverride: string | null) => {
+      const sourceText = messages.find((m) => m.type === "user-request")?.text ?? request;
+      const notes = buyerNotes.includes(note) ? buyerNotes : [...buyerNotes, note];
+      const terms = [
+        ...buildAnswers().filter(
+          (t) => t.answer && t.answer.trim() && t.answer.trim().toLowerCase() !== "not specified",
+        ),
+        ...notes.map((n) => ({ question: "Stated by you", answer: n })),
+      ];
+
+      const spinnerId = nextMsgId();
+      pushMessage({ id: spinnerId, role: "system", type: "drafting-spinner" });
+
+      try {
+        const result = await api.draftRfx(sourceText, confirmedItems.length, terms);
+        if (confirmedItems.length > 0) result.lineItems = confirmedItems;
+        const settledCurrency = currencyOverride ?? draft?.currency;
+        if (settledCurrency) result.currency = settledCurrency;
+
+        setDraft(result);
+        setCanvasCards([{ id: nextMsgId(), type: "draft-preview", payload: result }]);
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== spinnerId),
+          {
+            id: nextMsgId(),
+            role: "system" as const,
+            type: "ai-text" as const,
+            text: `✓ Reworked the proposal around that.\n\n• **${result.name}**\n• Currency: **${result.currency}**\n• **${result.lineItems.length}** line items, unchanged\n\nCheck the requirement summary on the right — anything I inferred rather than being told is listed under "Filled in for you".`,
+          },
+        ]);
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== spinnerId),
+          {
+            id: nextMsgId(),
+            role: "system" as const,
+            type: "error" as const,
+            text: `${(err as Error).message}\n\nYour requirement is still recorded and will go to suppliers, but the proposal text was not rewritten.`,
+          },
+        ]);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages, request, buyerNotes, confirmedItems, draft, answers, freeText, clarify],
+  );
 
   const handleUserMutation = useCallback(
     (text: string) => {
@@ -500,9 +653,14 @@ export default function RfxBuilderScreen() {
         text: trimmed,
       });
 
+      // Recorded before anything is interpreted, so a sentence carrying two
+      // requirements cannot lose the one this screen has no rule for.
+      setBuyerNotes((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+
       const lower = trimmed.toLowerCase();
 
-      // 1. Currency mutation intent
+      // A currency named in plain words is exact, so it is read here rather than
+      // inferred. Everything else in the sentence still goes to the model below.
       let detectedCurrency: string | null = null;
       if (/\b(inr|rupees|₹)\b/i.test(lower)) detectedCurrency = "INR";
       else if (/\b(usd|dollars|\$)\b/i.test(lower)) detectedCurrency = "USD";
@@ -512,65 +670,36 @@ export default function RfxBuilderScreen() {
 
       if (detectedCurrency) {
         const newCurr = detectedCurrency;
-        // Mutate draft state immediately
-        setDraft((prev) => {
-          if (prev) {
-            return { ...prev, currency: newCurr };
-          }
-          return {
-            name: "Corrugated Packaging Sourcing Event",
-            category: clarify?.detectedCategory ?? "Corrugated Packaging",
-            description: "Procurement event for corrugated packaging materials.",
-            suggestedRequiredByDays: 30,
-            currency: newCurr,
-            lineItems: confirmedItems.length > 0 ? confirmedItems : (clarify?.itemsDraft ?? []),
-            assumptions: [],
-          };
-        });
-
-        // Update commercial terms answers state
+        setDraft((prev) => (prev ? { ...prev, currency: newCurr } : prev));
         setAnswers((prev) => ({ ...prev, currency: [newCurr] }));
-
-        // Mutate canvas cards state to force immediate re-render
         setCanvasCards((prev) =>
-          prev.map((card) => {
-            if (card.type === "draft-preview") {
-              return { ...card, payload: { ...card.payload, currency: newCurr } };
-            }
-            return card;
-          })
+          prev.map((card) =>
+            card.type === "draft-preview"
+              ? { ...card, payload: { ...card.payload, currency: newCurr } }
+              : card,
+          ),
         );
+      }
 
-        pushMessage({
-          id: nextMsgId(),
-          role: "system",
-          type: "ai-text",
-          text: `✓ Updated RFx currency to **${newCurr}**. The output canvas on the right has been updated immediately.`,
-        });
+      // Once a proposal exists, a change to it is a change to the whole
+      // proposal, not a note stapled to the side of one.
+      if (draft) {
+        void redraftWith(trimmed, detectedCurrency);
         return;
       }
 
-      // 2. Generic mutation fallback for other requests
-      if (draft) {
-        setDraft((prev) => (prev ? { ...prev, description: `${prev.description} (${trimmed})` } : null));
-        setCanvasCards((prev) =>
-          prev.map((card) => {
-            if (card.type === "draft-preview") {
-              return { ...card, payload: { ...card.payload, description: `${card.payload.description} (${trimmed})` } };
-            }
-            return card;
-          })
-        );
-      }
-
+      // Before the draft is written there is nothing to rewrite. The requirement
+      // is held and handed to the model when the draft is generated.
       pushMessage({
         id: nextMsgId(),
         role: "system",
         type: "ai-text",
-        text: `✓ Updated current draft with: "${trimmed}". The canvas on the right reflects your changes.`,
+        text: detectedCurrency
+          ? `✓ Quotation currency set to **${detectedCurrency}**, and the rest of what you said is recorded. Both go into the draft when the terms are settled.`
+          : `✓ Recorded: “${trimmed}”\n\nIt goes into the draft when the terms are settled, and to every supplier with the invitation.`,
       });
     },
-    [draft, confirmedItems, clarify]
+    [draft, redraftWith]
   );
 
   // Register workspace command handler with ChatContext
@@ -638,9 +767,22 @@ export default function RfxBuilderScreen() {
 
       {/* ═══ Split-Screen Body ═══ */}
       <div className="flex flex-1 overflow-hidden pl-64">
-        {/* ──── LEFT PANE: Chat Feed (35%) ──── */}
-        <div className="w-[35%] flex flex-col border-r border-[var(--line)] bg-[var(--surface-sunken)]">
-          <div className="flex-1 overflow-y-auto pb-28">
+        {/* ──── LEFT PANE: the conversation, and the box it is typed into ──── */}
+        <div
+          className="relative flex flex-col border-r border-[var(--line)] bg-[var(--surface-sunken)]"
+          style={{ width: "var(--builder-pane)" }}
+        >
+          <PaneResizer
+            width={pane.width}
+            min={pane.min}
+            max={pane.max}
+            offset={240}
+            onResize={pane.set}
+            onReset={pane.reset}
+            label="Conversation width"
+          />
+
+          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
             {!hasMessages ? (
               /* Welcome state */
               <div className="flex flex-col items-center justify-center h-full px-6 py-12">
@@ -696,11 +838,18 @@ export default function RfxBuilderScreen() {
               </div>
             )}
           </div>
+
+          <div
+            className="shrink-0 px-3 py-3"
+            style={{ borderTop: "1px solid var(--line)", background: "var(--surface-sunken)" }}
+          >
+            <ChatComposer compact placeholder="Describe or refine your RFx…" />
+          </div>
         </div>
 
-        {/* ──── RIGHT PANE: Output Canvas (65%) ──── */}
-        <div className="w-[65%] flex flex-col bg-[var(--surface)]">
-          <div className="flex-1 overflow-y-auto pb-28">
+        {/* ──── RIGHT PANE: Output Canvas ──── */}
+        <div className="flex min-w-0 flex-1 flex-col bg-[var(--surface)]">
+          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto pb-6">
             {canvasCards.length === 0 ? (
               /* Empty canvas state */
               <div className="flex flex-col items-center justify-center h-full px-8 py-12 text-center">
@@ -737,6 +886,9 @@ export default function RfxBuilderScreen() {
                     buyers={buyers}
                     createRfx={createRfx}
                     stage={stage}
+                    terms={settledTerms()}
+                    onDraftChange={applyDraftEdit}
+                    onTermChange={applyTermEdit}
                     navigate={navigate}
                   />
                 ))}
@@ -857,6 +1009,9 @@ interface CanvasRenderContext {
   buyers: Buyer[];
   createRfx: () => void;
   stage: Stage;
+  terms: SettledTerm[];
+  onDraftChange: (next: RfxDraft) => void;
+  onTermChange: (key: string, answer: string) => void;
 }
 
 function CanvasCardRenderer(ctx: CanvasRenderContext) {
@@ -901,6 +1056,9 @@ function CanvasCardRenderer(ctx: CanvasRenderContext) {
           activeBuyerId={ctx.activeBuyerId}
           setActiveBuyerId={ctx.setActiveBuyerId}
           buyers={ctx.buyers}
+          terms={ctx.terms}
+          onDraftChange={ctx.onDraftChange}
+          onTermChange={ctx.onTermChange}
           onConfirm={ctx.createRfx}
           onDiscard={ctx.reset}
         />
@@ -1365,6 +1523,9 @@ function DraftPreviewCanvas({
   activeBuyerId,
   setActiveBuyerId,
   buyers,
+  terms,
+  onDraftChange,
+  onTermChange,
   onConfirm,
   onDiscard,
 }: {
@@ -1373,9 +1534,41 @@ function DraftPreviewCanvas({
   activeBuyerId: string;
   setActiveBuyerId: React.Dispatch<React.SetStateAction<string>>;
   buyers: Buyer[];
+  terms: SettledTerm[];
+  onDraftChange: (next: RfxDraft) => void;
+  onTermChange: (key: string, answer: string) => void;
   onConfirm: () => void;
   onDiscard: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+
+  // The same date createRfx will send, computed the same way, so the preview
+  // cannot promise a deadline the event does not get.
+  const requiredBy = new Date();
+  requiredBy.setDate(requiredBy.getDate() + (draft.suggestedRequiredByDays || 30));
+
+  const set = (patch: Partial<RfxDraft>) => onDraftChange({ ...draft, ...patch });
+
+  const setItem = (index: number, patch: Partial<DraftLineItem>) =>
+    set({ lineItems: draft.lineItems.map((li, i) => (i === index ? { ...li, ...patch } : li)) });
+
+  const removeItem = (index: number) =>
+    set({ lineItems: draft.lineItems.filter((_, i) => i !== index) });
+
+  const addItem = () =>
+    set({ lineItems: [...draft.lineItems, { name: "", specification: "", quantity: 1, unit: "pcs" }] });
+
+  // The date is what a buyer thinks in; the draft stores a horizon in days, so
+  // the conversion happens here rather than leaving two fields to disagree.
+  const setRequiredByDate = (iso: string) => {
+    if (!iso) return;
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const chosen = new Date(`${iso}T00:00:00`);
+    const days = Math.round((chosen.getTime() - midnight.getTime()) / 86_400_000);
+    set({ suggestedRequiredByDays: Math.max(1, days) });
+  };
+
   return (
     <div className="rounded-xl border border-[var(--good-line)] bg-[var(--surface)] shadow-sm overflow-hidden">
       <div className="flex items-start justify-between border-b border-[var(--good-line)] bg-[var(--good-soft)] px-5 py-4">
@@ -1386,23 +1579,182 @@ function DraftPreviewCanvas({
           >
             <Icon name="check" size={13} />
           </span>
-          <div>
-            <p className="text-[14px] font-bold text-[var(--ink)]">{draft.name}</p>
+          <div className="min-w-0 flex-1">
+            {editing ? (
+              <input
+                value={draft.name}
+                onChange={(e) => set({ name: e.target.value })}
+                aria-label="Event name"
+                className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[14px] font-bold text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+              />
+            ) : (
+              <p className="text-[14px] font-bold text-[var(--ink)]">{draft.name}</p>
+            )}
             <p className="mt-0.5 text-[12px] text-[var(--ink-muted)]">
               {draft.category} · {draft.currency} · {draft.lineItems.length} items
             </p>
           </div>
         </div>
-        <button
-          onClick={onDiscard}
-          className="text-[12px] text-[var(--ink-muted)] transition-colors hover:text-[var(--critical)]"
-        >
-          Discard
-        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          {/* Correcting a line here beats going back to the chat to describe the
+              correction and waiting for it to be interpreted. */}
+          <button
+            onClick={() => setEditing((v) => !v)}
+            className="pressable rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--surface-hover)]"
+          >
+            {editing ? "Done editing" : "Edit"}
+          </button>
+          <button
+            onClick={onDiscard}
+            className="text-[12px] text-[var(--ink-muted)] transition-colors hover:text-[var(--critical)]"
+          >
+            Discard
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4 px-5 py-4">
-        <p className="text-[13px] leading-relaxed text-[var(--ink-secondary)]">{draft.description}</p>
+        {editing ? (
+          <textarea
+            value={draft.description}
+            onChange={(e) => set({ description: e.target.value })}
+            rows={3}
+            aria-label="Scope description"
+            className="w-full resize-y rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 py-2 text-[13px] leading-relaxed text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+          />
+        ) : (
+          <p className="text-[13px] leading-relaxed text-[var(--ink-secondary)]">{draft.description}</p>
+        )}
+
+        {/* What the supplier will be told, gathered in one place.
+            Reading it back out of the conversation is work the buyer should not
+            have to do twice, and a term that only exists in the transcript is a
+            term nobody checks. */}
+        <div className="rounded-lg border border-[var(--line)] bg-[var(--surface-sunken)] px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-muted)]">
+            Requirement summary
+          </p>
+
+          <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 text-[12.5px]">
+            <dt className="self-center text-[var(--ink-muted)]">Category</dt>
+            <dd className="font-medium text-[var(--ink)]">
+              {editing ? (
+                <input
+                  value={draft.category}
+                  onChange={(e) => set({ category: e.target.value })}
+                  aria-label="Category"
+                  className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                />
+              ) : (
+                draft.category
+              )}
+            </dd>
+
+            <dt className="self-center text-[var(--ink-muted)]">Quotation currency</dt>
+            <dd className="num font-medium text-[var(--ink)]">
+              {editing ? (
+                <select
+                  value={draft.currency}
+                  onChange={(e) => set({ currency: e.target.value })}
+                  aria-label="Quotation currency"
+                  className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                >
+                  {["INR", "USD", "EUR", "GBP", "JPY"].map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                draft.currency
+              )}
+            </dd>
+
+            <dt className="self-center text-[var(--ink-muted)]">Line items</dt>
+            <dd className="num font-medium text-[var(--ink)]">{draft.lineItems.length}</dd>
+
+            <dt className="self-center text-[var(--ink-muted)]">Required by</dt>
+            <dd className="font-medium text-[var(--ink)]">
+              {editing ? (
+                <input
+                  type="date"
+                  value={requiredBy.toISOString().slice(0, 10)}
+                  onChange={(e) => setRequiredByDate(e.target.value)}
+                  aria-label="Required by"
+                  className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                />
+              ) : (
+                requiredBy.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+              )}
+            </dd>
+          </dl>
+
+          {terms.length > 0 && (
+            <div className="mt-3.5 border-t border-[var(--line)] pt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-muted)]">
+                Commercial &amp; delivery terms
+              </p>
+              <dl className="mt-2 space-y-1.5 text-[12.5px]">
+                {terms.map((t) => (
+                  /* Reading, the question is context and the answer is the point,
+                     so they sit on one line. Editing, the field needs the width,
+                     so the question moves above it. */
+                  <div
+                    key={t.key}
+                    className={editing ? "" : "grid grid-cols-[auto_1fr] items-center gap-x-5"}
+                  >
+                    <dt className={`text-[var(--ink-muted)] ${editing ? "mb-1" : ""}`}>{t.question}</dt>
+                    <dd className="font-medium text-[var(--ink)]">
+                      {editing ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            value={t.answer}
+                            onChange={(e) => onTermChange(t.key, e.target.value)}
+                            aria-label={t.question}
+                            className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                          />
+                          {/* Emptying a term drops it rather than sending a blank
+                              condition to the supplier. */}
+                          <button
+                            onClick={() => onTermChange(t.key, "")}
+                            title="Remove this term"
+                            className="pressable rounded p-1 text-[var(--ink-muted)] hover:text-[var(--critical)]"
+                          >
+                            <Icon name="close" size={12} />
+                          </button>
+                        </div>
+                      ) : (
+                        t.answer
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
+
+          {draft.assumptions.length > 0 && (
+            <div className="mt-3.5 border-t border-[var(--line)] pt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--warning)" }}>
+                Filled in for you — correct anything wrong
+              </p>
+              <ul className="mt-2 space-y-1">
+                {draft.assumptions.map((a, i) => (
+                  <li key={i} className="flex gap-2 text-[12.5px] leading-relaxed text-[var(--ink-secondary)]">
+                    <span className="mt-[3px] shrink-0" style={{ color: "var(--warning)" }}>
+                      <Icon name="alert" size={11} />
+                    </span>
+                    {a}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <p className="mt-3 text-[11.5px] leading-relaxed text-[var(--ink-muted)]">
+            Everything above is carried into the invitation each supplier receives, alongside the item list.
+          </p>
+        </div>
 
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-muted)] mb-2">
@@ -1416,22 +1768,79 @@ function DraftPreviewCanvas({
                   <th className="px-3 py-2">Specification</th>
                   <th className="px-3 py-2 text-right">Qty</th>
                   <th className="px-3 py-2">Unit</th>
+                  {editing && <th className="px-2 py-2" />}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
-                {draft.lineItems.map((li, i) => (
-                  <tr key={i} className="hover:bg-[var(--surface-sunken)]">
-                    <td className="px-3 py-2 font-medium text-[var(--ink)]">{li.name}</td>
-                    <td className="px-3 py-2 text-[var(--ink-muted)]">{li.specification}</td>
-                    <td className="px-3 py-2 text-right font-medium text-[var(--ink-secondary)]">
-                      {li.quantity.toLocaleString("en-IN")}
-                    </td>
-                    <td className="px-3 py-2 text-[var(--ink-muted)]">{li.unit}</td>
-                  </tr>
-                ))}
+                {draft.lineItems.map((li, i) =>
+                  editing ? (
+                    <tr key={i}>
+                      <td className="px-2 py-1.5">
+                        <input
+                          value={li.name}
+                          onChange={(e) => setItem(i, { name: e.target.value })}
+                          aria-label={`Item ${i + 1} name`}
+                          className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          value={li.specification}
+                          onChange={(e) => setItem(i, { specification: e.target.value })}
+                          aria-label={`Item ${i + 1} specification`}
+                          className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="number"
+                          min={0}
+                          value={li.quantity}
+                          onChange={(e) => setItem(i, { quantity: Number(e.target.value) || 0 })}
+                          aria-label={`Item ${i + 1} quantity`}
+                          className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)] num text-right"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          value={li.unit}
+                          onChange={(e) => setItem(i, { unit: e.target.value })}
+                          aria-label={`Item ${i + 1} unit`}
+                          className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--surface)] px-2 py-1 text-[12.5px] text-[var(--ink)] outline-none focus:border-[var(--ink)]"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <button
+                          onClick={() => removeItem(i)}
+                          title="Remove this item"
+                          className="pressable rounded p-1 text-[var(--ink-muted)] hover:text-[var(--critical)]"
+                        >
+                          <Icon name="close" size={12} />
+                        </button>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={i} className="hover:bg-[var(--surface-sunken)]">
+                      <td className="px-3 py-2 font-medium text-[var(--ink)]">{li.name}</td>
+                      <td className="px-3 py-2 text-[var(--ink-muted)]">{li.specification}</td>
+                      <td className="px-3 py-2 text-right font-medium text-[var(--ink-secondary)]">
+                        {li.quantity.toLocaleString("en-IN")}
+                      </td>
+                      <td className="px-3 py-2 text-[var(--ink-muted)]">{li.unit}</td>
+                    </tr>
+                  ),
+                )}
               </tbody>
             </table>
           </div>
+          {editing && (
+            <button
+              onClick={addItem}
+              className="pressable mt-2 rounded-md border border-dashed border-[var(--line-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+            >
+              + Add a line item
+            </button>
+          )}
         </div>
       </div>
 

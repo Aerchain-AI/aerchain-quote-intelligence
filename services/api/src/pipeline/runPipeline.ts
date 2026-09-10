@@ -8,7 +8,7 @@ import { normalizeQuote } from "./normalize.js";
 import {
   buildDocumentLevelExceptions,
   buildImplicitMissingTaxException,
-  buildQualityException,
+  buildQualityExceptions,
   summarizeVendor,
   validateLine,
   type ExceptionDraft,
@@ -131,10 +131,11 @@ export async function runPipelineForVendor(vendorId: string): Promise<PipelineRu
   exceptionDrafts.push(...buildDocumentLevelExceptions(extraction.documentLevelNotes));
   const implicitTax = buildImplicitMissingTaxException(anyLineHasTax, extraction.documentLevelNotes);
   if (implicitTax) exceptionDrafts.push(implicitTax);
-  const qualityException = buildQualityException(extraction.questionnaireResponses);
-  if (qualityException) exceptionDrafts.push(qualityException);
+  const qualityExceptions = buildQualityExceptions(extraction.questionnaireResponses);
+  exceptionDrafts.push(...qualityExceptions);
 
-  const summary = summarizeVendor(lineStatuses, qualityException != null);
+  // An unanswered questionnaire is a reason to look, the same as a failed one.
+  const summary = summarizeVendor(lineStatuses, qualityExceptions.length > 0);
 
   await prisma.$transaction(async (tx) => {
     await tx.vendorQuote.deleteMany({ where: { vendorId } });

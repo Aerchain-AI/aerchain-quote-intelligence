@@ -20,6 +20,18 @@ function usable(quote: DatasetQuote | undefined): quote is DatasetQuote {
   return !!quote && quote.status !== "not_quoted" && quote.evaluatedValue != null;
 }
 
+/**
+ * A price the vendor did give that this system will not compare.
+ *
+ * "Did not quote" and "quoted on a basis we cannot convert" are different facts
+ * and they send a buyer to do different work: one is a call asking for a price,
+ * the other is a question about what the price covers. Counting them together
+ * reports that a vendor left items unpriced when it priced every one of them.
+ */
+function quotedButUncomparable(quote: DatasetQuote | undefined): boolean {
+  return !!quote && quote.status !== "not_quoted" && quote.evaluatedValue == null;
+}
+
 export function getQuote(dataset: ComparisonDataset, vendorId: string, lineItemId: number): DatasetQuote | undefined {
   return dataset.quotes.get(quoteKey(vendorId, lineItemId));
 }
@@ -93,7 +105,12 @@ export interface VendorTotal {
   vendorId: string;
   vendorName: string;
   itemsQuoted: number;
-  itemsMissing: number;
+  /**
+   * Items with no comparable price, whether the vendor gave none or gave one
+   * this system would not convert. Named for what it is, because "missing" sent
+   * buyers to chase prices that had in fact been quoted.
+   */
+  itemsWithoutComparablePrice: number;
   /** Total over the items THIS vendor priced. Not comparable across vendors. */
   ownBasketTotal: number;
   /** Total over the shared comparable basket. null if the vendor misses part of it. */
@@ -150,7 +167,7 @@ export function buildComparableBasket(dataset: ComparisonDataset, vendorIds: str
       vendorId: vendor.id,
       vendorName: vendor.name,
       itemsQuoted,
-      itemsMissing: dataset.lineItems.length - itemsQuoted,
+      itemsWithoutComparablePrice: dataset.lineItems.length - itemsQuoted,
       ownBasketTotal: round2(ownBasketTotal),
       comparableTotal: comparableTotal == null ? null : round2(comparableTotal),
     };
@@ -160,6 +177,62 @@ export function buildComparableBasket(dataset: ComparisonDataset, vendorIds: str
 }
 
 // ---------------------------------------------------------- cheapest overall
+
+/**
+ * What had to be assumed before these totals could be added up.
+ *
+ * Two kinds of assumption change a total: a price in another currency, which was
+ * converted at a stated rate, and a price on a unit basis that could not be
+ * converted, which was left out. Both are already recorded per line. This states
+ * them once more at the level a buyer actually compares at.
+ */
+function conversionCaveats(dataset: ComparisonDataset, eligibleVendorIds: string[]): string[] {
+  const eligible = new Set(eligibleVendorIds);
+  const converted = new Map<string, { count: number; currencies: Set<string>; rate: string | null }>();
+  const refused = new Map<string, { count: number; units: Set<string> }>();
+
+  for (const vendor of dataset.vendors) {
+    if (!eligible.has(vendor.id)) continue;
+    for (const li of dataset.lineItems) {
+      const q = getQuote(dataset, vendor.id, li.id);
+      if (!q) continue;
+
+      if (q.sourceCurrency && q.normalizedCurrency && q.sourceCurrency !== q.normalizedCurrency) {
+        const entry = converted.get(vendor.name) ?? { count: 0, currencies: new Set<string>(), rate: null };
+        entry.count += 1;
+        entry.currencies.add(q.sourceCurrency);
+        if (!entry.rate && q.fxRate) {
+          const fx = q.fxRate;
+          entry.rate = `${fx.rate}${fx.asOf ? ` as of ${fx.asOf}` : ""}${fx.source ? ` (${fx.source})` : ""}`;
+        }
+        converted.set(vendor.name, entry);
+      }
+
+      if (q.evaluatedValue == null && q.status !== "not_quoted" && q.sourceUnit) {
+        const entry = refused.get(vendor.name) ?? { count: 0, units: new Set<string>() };
+        entry.count += 1;
+        entry.units.add(q.sourceUnit);
+        refused.set(vendor.name, entry);
+      }
+    }
+  }
+
+  const notes: string[] = [];
+  for (const [vendorName, entry] of converted) {
+    notes.push(
+      `${vendorName} priced ${entry.count} line(s) in ${[...entry.currencies].join("/")}. ` +
+        `Those lines were converted to ${dataset.baseCurrency} at ${entry.rate ?? "the reference rate on file"}, ` +
+        `so its position in this ranking moves with that rate.`,
+    );
+  }
+  for (const [vendorName, entry] of refused) {
+    notes.push(
+      `${vendorName} priced ${entry.count} line(s) per "${[...entry.units].join('", "')}", which was not converted to the ` +
+        `requested unit. Those lines carry no comparable value and are excluded rather than guessed.`,
+    );
+  }
+  return notes;
+}
 
 export interface CheapestOverallResult {
   ranking: VendorTotal[];
@@ -191,12 +264,17 @@ export function cheapestOverall(
     );
   }
   for (const total of basket.totals) {
-    if (total.itemsMissing > 0) {
+    if (total.itemsWithoutComparablePrice > 0) {
       caveats.push(
-        `${total.vendorName} did not quote ${total.itemsMissing} item(s); its full-basket total is not comparable to vendors with full coverage.`,
+        `${total.vendorName} has no comparable price for ${total.itemsWithoutComparablePrice} item(s); its full-basket total is not comparable to vendors with full coverage.`,
       );
     }
   }
+
+  // A ranking that rests on a conversion has to say so on the ranking, not only
+  // on the line. A reader comparing two totals is looking at this answer, and a
+  // disclosure they have to go and find is a disclosure they will not read.
+  for (const note of conversionCaveats(dataset, eligibleVendorIds)) caveats.push(note);
 
   return {
     ranking,
@@ -475,8 +553,12 @@ export interface VendorRiskProfile {
   vendorId: string;
   vendorName: string;
   responseFormat: string;
+  /** Line items with a price this system can compare. */
   itemsQuoted: number;
-  itemsMissing: number;
+  /** Line items the vendor gave no price for. */
+  itemsNotQuoted: number;
+  /** Line items it priced on a basis that could not be converted. */
+  itemsNotComparable: number;
   overallConfidence: number | null;
   qualityStatus: string;
   qualityHardFailures: string[];
@@ -503,6 +585,8 @@ export function vendorRiskProfile(dataset: ComparisonDataset, vendorId: string):
 
   const lowConfidenceLineItems: VendorRiskProfile["lowConfidenceLineItems"] = [];
   let itemsQuoted = 0;
+  let itemsNotQuoted = 0;
+  let itemsNotComparable = 0;
   for (const li of dataset.lineItems) {
     const q = getQuote(dataset, vendorId, li.id);
     if (usable(q)) {
@@ -510,7 +594,12 @@ export function vendorRiskProfile(dataset: ComparisonDataset, vendorId: string):
       if (q.confidence != null && q.confidence < 0.9) {
         lowConfidenceLineItems.push({ lineItemId: li.id, name: li.name, confidence: q.confidence });
       }
+      continue;
     }
+    // A vendor that priced an item on a basis we refused to convert has not
+    // left it unpriced, and saying so sends the buyer chasing the wrong thing.
+    if (quotedButUncomparable(q)) itemsNotComparable += 1;
+    else itemsNotQuoted += 1;
   }
 
   const commercialGaps: string[] = [];
@@ -529,7 +618,8 @@ export function vendorRiskProfile(dataset: ComparisonDataset, vendorId: string):
     vendorName: vendor.name,
     responseFormat: vendor.responseFormat,
     itemsQuoted,
-    itemsMissing: dataset.lineItems.length - itemsQuoted,
+    itemsNotQuoted,
+    itemsNotComparable,
     overallConfidence: vendor.overallConfidence,
     qualityStatus: vendor.quality.status,
     qualityHardFailures: vendor.quality.hardFailures,
@@ -539,6 +629,291 @@ export function vendorRiskProfile(dataset: ComparisonDataset, vendorId: string):
     commercialGaps,
     paymentTerms: answerFor(9),
     leadTime: answerFor(4),
+  };
+}
+
+// ------------------------------------------------------------ comparability
+
+export interface ComparabilityReport {
+  baseCurrency: string;
+  totalLineItems: number;
+  comparableLineItems: number;
+  excludedLineItems: Array<{ lineItemId: number; name: string; reason: string }>;
+  /** Every place a number on screen is not the number on the vendor's page. */
+  adjustments: Array<{
+    vendorName: string;
+    kind: "currency" | "unit_converted" | "unit_assumed" | "unit_refused";
+    lineCount: number;
+    detail: string;
+  }>;
+  /** Commercial elements nobody stated, which sit outside every total. */
+  unstatedCommercials: Array<{ vendorName: string; element: string }>;
+  directlyComparable: boolean;
+}
+
+/**
+ * Whether these prices can be put side by side, and what had to happen first.
+ *
+ * The honest answer is almost never a plain yes. Vendors quote in their own
+ * currency, on their own unit basis, and leave freight and tax to be settled
+ * later. Each of those is a step between what the vendor wrote and what the
+ * buyer reads, and this lists every one of them rather than presenting the
+ * adjusted number as if it were the quote.
+ */
+export function comparabilityReport(
+  dataset: ComparisonDataset,
+  constraints: EligibilityConstraints = {},
+): ComparabilityReport {
+  const { eligibleVendorIds } = resolveEligibleVendors(dataset, constraints);
+  const basket = buildComparableBasket(dataset, eligibleVendorIds);
+
+  type Bucket = { lineCount: number; details: Set<string> };
+  const buckets = new Map<string, Bucket>();
+  const key = (vendorName: string, kind: string) => `${vendorName}||${kind}`;
+  const add = (vendorName: string, kind: string, detail: string) => {
+    const k = key(vendorName, kind);
+    const b = buckets.get(k) ?? { lineCount: 0, details: new Set<string>() };
+    b.lineCount += 1;
+    b.details.add(detail);
+    buckets.set(k, b);
+  };
+
+  for (const vendor of dataset.vendors) {
+    for (const li of dataset.lineItems) {
+      const q = getQuote(dataset, vendor.id, li.id);
+      if (!q || q.status === "not_quoted") continue;
+
+      if (q.sourceCurrency && q.sourceCurrency !== dataset.baseCurrency) {
+        const rate = q.fxRate ? `${q.fxRate.rate} as of ${q.fxRate.asOf}` : "the reference rate on file";
+        add(vendor.name, "currency", `${q.sourceCurrency} converted at ${rate}`);
+      }
+
+      if (q.evaluatedValue == null && q.sourceValue != null) {
+        add(vendor.name, "unit_refused", `priced per "${q.sourceUnit ?? "an unstated basis"}", not converted`);
+        continue;
+      }
+
+      if (!q.sourceUnit || !q.sourceUnit.trim()) {
+        add(vendor.name, "unit_assumed", `no unit stated, read as a rate per ${li.unit}`);
+      } else if (q.sourceValue != null && q.normalizedValue != null) {
+        // The factor is not stored, so it is recovered from the two numbers.
+        // Currency is divided out first so an FX conversion is not read as one.
+        const inBase = q.sourceCurrency && q.fxRate ? q.sourceValue * q.fxRate.rate : q.sourceValue;
+        const raw = q.normalizedValue === 0 ? 1 : inBase / q.normalizedValue;
+        // The stored numbers are rounded to paise, so dividing them back gives
+        // 99.82 where the vendor plainly wrote "per 100". Report the divisor the
+        // vendor used, not the rounding error in our own two decimal places.
+        const nearest = Math.round(raw);
+        const factor = nearest > 0 && Math.abs(raw - nearest) / nearest < 0.01 ? nearest : Math.round(raw * 100) / 100;
+        if (Math.abs(factor - 1) > 0.01) {
+          add(
+            vendor.name,
+            "unit_converted",
+            `priced per "${q.sourceUnit}", divided by ${factor} to reach a rate per ${li.unit}`,
+          );
+        }
+      }
+    }
+  }
+
+  const adjustments: ComparabilityReport["adjustments"] = [];
+  for (const [k, b] of buckets) {
+    const [vendorName, kind] = k.split("||");
+    adjustments.push({
+      vendorName,
+      kind: kind as ComparabilityReport["adjustments"][number]["kind"],
+      lineCount: b.lineCount,
+      detail: [...b.details].join("; "),
+    });
+  }
+  adjustments.sort((a, b) => b.lineCount - a.lineCount);
+
+  const unstatedCommercials: ComparabilityReport["unstatedCommercials"] = [];
+  for (const ex of dataset.exceptions) {
+    if (ex.type !== "missing_freight" && ex.type !== "missing_tax") continue;
+    const vendorName = dataset.vendors.find((v) => v.id === ex.vendorId)?.name ?? "A vendor";
+    unstatedCommercials.push({ vendorName, element: ex.type === "missing_freight" ? "freight" : "tax" });
+  }
+
+  return {
+    baseCurrency: dataset.baseCurrency,
+    totalLineItems: dataset.lineItems.length,
+    comparableLineItems: basket.lineItemIds.length,
+    excludedLineItems: basket.excludedLineItems,
+    adjustments,
+    unstatedCommercials,
+    directlyComparable: adjustments.length === 0 && basket.excludedLineItems.length === 0,
+  };
+}
+
+// ------------------------------------------------------------ quality status
+
+export interface QualityStandingReport {
+  gatingQuestionCount: number;
+  vendors: Array<{
+    vendorId: string;
+    vendorName: string;
+    /** "passed" | "failed" | "unresolved" — failed means the vendor said no. */
+    status: string;
+    /** Criteria the vendor answered no to. These disqualify. */
+    answeredNo: string[];
+    /** Criteria the vendor left blank. These are unknown, not no. */
+    unanswered: string[];
+    verdict: string;
+  }>;
+  disqualified: string[];
+  requiresVerification: string[];
+  clear: string[];
+}
+
+/**
+ * Where each vendor stands on the quality questionnaire.
+ *
+ * The whole point of this analysis is the distinction the summary line has to
+ * carry: a vendor that answered no has ruled itself out, and a vendor that left
+ * the question blank has told the buyer nothing. Both need action, but only one
+ * of them is a reason to drop a supplier, and collapsing them into a single
+ * "failed" count rejects companies on grounds nobody ever checked.
+ */
+export function qualityStanding(dataset: ComparisonDataset): QualityStandingReport {
+  const disqualified: string[] = [];
+  const requiresVerification: string[] = [];
+  const clear: string[] = [];
+
+  const vendors = dataset.vendors.map((v) => {
+    const answeredNo = v.quality.hardFailures;
+    const unanswered = v.quality.unresolved;
+
+    let verdict: string;
+    if (answeredNo.length > 0) {
+      verdict =
+        `Disqualified on ${answeredNo.length} criterion(s) the vendor answered no to` +
+        (unanswered.length > 0 ? `, with ${unanswered.length} more left unanswered.` : ".");
+      disqualified.push(v.name);
+    } else if (unanswered.length > 0) {
+      verdict =
+        `Unknown — ${unanswered.length} gating criterion(s) were left unanswered. ` +
+        `This is not a failure and not a pass; it requires verification with the vendor before award.`;
+      requiresVerification.push(v.name);
+    } else {
+      verdict = "Answered every gating criterion, with no failures.";
+      clear.push(v.name);
+    }
+
+    return {
+      vendorId: v.id,
+      vendorName: v.name,
+      status: v.quality.status,
+      answeredNo,
+      unanswered,
+      verdict,
+    };
+  });
+
+  const gatingQuestionCount =
+    vendors.length > 0
+      ? Math.max(...vendors.map((v) => v.answeredNo.length + v.unanswered.length), 0)
+      : 0;
+
+  return { gatingQuestionCount, vendors, disqualified, requiresVerification, clear };
+}
+
+// -------------------------------------------------------------- vendor history
+
+export interface VendorHistoryReport {
+  /** Set when the question named one vendor. */
+  focusVendorName: string | null;
+  vendors: Array<{
+    vendorId: string;
+    vendorName: string;
+    knownToUs: boolean;
+    verificationStatus: string | null;
+    verificationNote: string | null;
+    city: string | null;
+    onTimeDeliveryPct: number | null;
+    awardsOnRecord: number;
+    bidsOnRecord: number;
+    qualityIncidents: number;
+    records: Array<{
+      reference: string;
+      title: string;
+      category: string;
+      completedOn: string;
+      outcome: string;
+      performance: string | null;
+      qualityIncidents: number;
+      awardValueInr: number;
+      wonBy: string;
+    }>;
+    summary: string;
+  }>;
+  source: string;
+}
+
+/**
+ * What our own records say about the companies that responded.
+ *
+ * This reads the supplier registry and the closed procurements it is linked to.
+ * Nothing here is inferred from the quotes in front of us: a vendor with no rows
+ * is reported as absent from our records, which is not the same as new, and not
+ * the same as bad. The distinction matters because "we have never bought from
+ * them" is a reason to check, while "they performed badly" is a reason to stop.
+ */
+export function vendorHistory(dataset: ComparisonDataset, focusVendorName?: string | null): VendorHistoryReport {
+  const wanted = focusVendorName?.trim().toLowerCase() ?? null;
+
+  const vendors = dataset.vendors
+    .filter((v) => !wanted || v.name.trim().toLowerCase().includes(wanted) || wanted.includes(v.name.trim().toLowerCase()))
+    .map((v) => {
+      const s = v.supplier;
+      const records = (s?.history ?? []).map((h) => ({
+        reference: h.externalId,
+        title: h.title,
+        category: h.category,
+        completedOn: h.completedAt,
+        outcome: h.result,
+        performance: h.performance,
+        qualityIncidents: h.qualityIncidents,
+        awardValueInr: h.awardValueInr,
+        wonBy: h.awardedVendorName,
+      }));
+      const awards = records.filter((r) => r.outcome === "awarded").length;
+      const incidents = records.reduce((sum, r) => sum + r.qualityIncidents, 0);
+
+      let summary: string;
+      if (!s) {
+        summary = `${v.name} does not match any supplier in our registry, so we hold no history for it.`;
+      } else if (records.length === 0) {
+        summary =
+          `${v.name} is in the registry (${s.verificationStatus}) but appears in no closed procurement we hold. ` +
+          `No prior work on record.`;
+      } else {
+        summary =
+          `${v.name} appears in ${records.length} closed procurement(s), winning ${awards}. ` +
+          `Delivery performance on record: ${records.map((r) => r.performance ?? "not recorded").join(", ")}. ` +
+          `Quality incidents recorded: ${incidents}.`;
+      }
+
+      return {
+        vendorId: v.id,
+        vendorName: v.name,
+        knownToUs: records.length > 0,
+        verificationStatus: s?.verificationStatus ?? null,
+        verificationNote: s?.verificationNote ?? null,
+        city: s?.city ?? null,
+        onTimeDeliveryPct: s?.onTimeDeliveryPct ?? null,
+        awardsOnRecord: awards,
+        bidsOnRecord: records.length,
+        qualityIncidents: incidents,
+        records,
+        summary,
+      };
+    });
+
+  return {
+    focusVendorName: focusVendorName ?? null,
+    vendors,
+    source: "Supplier registry and closed procurement records held by this system. Not inferred from the current quotes.",
   };
 }
 
@@ -605,7 +980,14 @@ export interface ExceptionSummary {
   total: number;
   byType: Array<{ type: string; count: number; severity: string }>;
   bySeverity: Array<{ severity: string; count: number }>;
-  vendorsWithIncompleteResponses: Array<{ vendorId: string; vendorName: string; itemsMissing: number }>;
+  vendorsWithIncompleteResponses: Array<{
+    vendorId: string;
+    vendorName: string;
+    /** Line items this vendor gave no price for at all. */
+    itemsNotQuoted: number;
+    /** Line items it priced on a basis that could not be converted. */
+    itemsNotComparable: number;
+  }>;
 }
 
 export function summarizeExceptions(dataset: ComparisonDataset): ExceptionSummary {
@@ -620,10 +1002,17 @@ export function summarizeExceptions(dataset: ComparisonDataset): ExceptionSummar
 
   const vendorsWithIncompleteResponses = dataset.vendors
     .map((v) => {
-      const itemsMissing = dataset.lineItems.filter((li) => !usable(getQuote(dataset, v.id, li.id))).length;
-      return { vendorId: v.id, vendorName: v.name, itemsMissing };
+      let itemsNotQuoted = 0;
+      let itemsNotComparable = 0;
+      for (const li of dataset.lineItems) {
+        const quote = getQuote(dataset, v.id, li.id);
+        if (usable(quote)) continue;
+        if (quotedButUncomparable(quote)) itemsNotComparable += 1;
+        else itemsNotQuoted += 1;
+      }
+      return { vendorId: v.id, vendorName: v.name, itemsNotQuoted, itemsNotComparable };
     })
-    .filter((v) => v.itemsMissing > 0);
+    .filter((v) => v.itemsNotQuoted > 0 || v.itemsNotComparable > 0);
 
   return {
     total: dataset.exceptions.length,

@@ -1,3 +1,4 @@
+import { buildAwardRecommendation } from "../award/recommend.js";
 import { FunctionCallingConfigMode } from "@google/genai";
 import type { ComparisonDataset } from "../calc/dataset.js";
 import {
@@ -6,7 +7,10 @@ import {
   resolveEligibleVendors,
   scenarioAdditionalDiscount,
   splitAward,
+  comparabilityReport,
+  qualityStanding,
   summarizeExceptions,
+  vendorHistory,
   vendorRiskProfile,
   type EligibilityConstraints,
 } from "../calc/engine.js";
@@ -192,6 +196,27 @@ export function executeAnalysis(
     case "incomplete_responses": {
       const result = summarizeExceptions(dataset);
       return { calculation: result, caveats: [], supported: true };
+    }
+    case "comparability": {
+      return { calculation: comparabilityReport(dataset, constraints), caveats: [], supported: true };
+    }
+    case "quality_standing": {
+      return { calculation: qualityStanding(dataset), caveats: [], supported: true };
+    }
+    case "award_recommendation": {
+      return { calculation: buildAwardRecommendation(dataset), caveats: [], supported: true };
+    }
+    case "vendor_history": {
+      const report = vendorHistory(dataset, plan.vendorName);
+      if (report.vendors.length === 0) {
+        return {
+          calculation: null,
+          caveats: [],
+          supported: false,
+          missingReason: `No vendor matching "${plan.vendorName ?? "(unnamed)"}" responded to this sourcing event.`,
+        };
+      }
+      return { calculation: report, caveats: [], supported: true };
     }
     case "commercial_terms": {
       return {

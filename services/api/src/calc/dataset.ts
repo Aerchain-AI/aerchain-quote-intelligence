@@ -1,5 +1,5 @@
 import type { ConfidenceLevel, ExceptionSeverity, ExceptionType, MoneyAdjustment, QuoteStatus } from "@aerchain/shared";
-import { QUALITY_GATING_QUESTION_IDS } from "@aerchain/shared";
+import { QUALITY_GATING_QUESTION_IDS, QUESTIONNAIRE_QUESTIONS } from "@aerchain/shared";
 import { prisma } from "../db.js";
 
 /** The in-memory shape every calculation runs against. Built once from the DB,
@@ -67,6 +67,36 @@ export interface DatasetVendor {
   /** Deterministic verdict over the gating questions. An explicit "no" is a
    * disqualification; a blank or hedged answer is unresolved, not a rejection. */
   quality: QualityAssessment;
+  /**
+   * The registered supplier this response came from, where the name matches one.
+   *
+   * A response is a document; a supplier is a company with a history. Carrying
+   * the second alongside the first is what lets "have we bought from them
+   * before" be answered from records rather than from the quote in hand.
+   */
+  supplier: DatasetSupplier | null;
+}
+
+export interface DatasetSupplier {
+  id: string;
+  verificationStatus: string;
+  verificationNote: string | null;
+  city: string | null;
+  gstin: string | null;
+  paymentTerms: string | null;
+  onTimeDeliveryPct: number | null;
+  history: Array<{
+    externalId: string;
+    title: string;
+    category: string;
+    completedAt: string;
+    /** "awarded" or "participated". */
+    result: string;
+    performance: string | null;
+    qualityIncidents: number;
+    awardValueInr: number;
+    awardedVendorName: string;
+  }>;
 }
 
 export type QualityStatus = "passed" | "failed" | "unresolved";
@@ -116,7 +146,11 @@ function evaluateQuality(answers: DatasetQuestionnaireAnswer[]): QualityAssessme
   const unresolved: string[] = [];
   for (const qid of QUALITY_GATING_QUESTION_IDS) {
     const answer = answers.find((a) => a.questionId === qid);
-    const label = answer?.questionText ?? `Question ${qid}`;
+    // Falling back to "Question 5" told the buyer nothing about what was left
+    // unanswered. The questionnaire is a fixed list, so the text is always
+    // available even when the vendor said nothing against it.
+    const label =
+      answer?.questionText ?? QUESTIONNAIRE_QUESTIONS.find((q) => q.id === qid)?.text ?? `Question ${qid}`;
     if (answer?.passFail === false) {
       hardFailures.push(label);
     } else if (!answer || !answer.answerText.trim() || answer.passFail !== true) {
@@ -136,6 +170,14 @@ export async function loadComparisonDataset(rfxId: string): Promise<ComparisonDa
     prisma.quoteException.findMany({ where: { vendor: { rfxId } } }),
     prisma.questionnaireResponse.findMany({ where: { vendor: { rfxId } }, orderBy: { questionId: "asc" } }),
   ]);
+
+  // Matched on name, the same rule the inbound matcher uses. A response whose
+  // name matches nothing in the registry simply has no history, which is a fact
+  // about our records rather than a fact about the supplier.
+  const suppliers = await prisma.supplier.findMany({
+    include: { participation: { include: { procurement: true } } },
+  });
+  const supplierByName = new Map(suppliers.map((s) => [s.name.trim().toLowerCase(), s]));
 
   const datasetVendors: DatasetVendor[] = vendors.map((v) => {
     const answers: DatasetQuestionnaireAnswer[] = questionnaire
@@ -158,6 +200,32 @@ export async function loadComparisonDataset(rfxId: string): Promise<ComparisonDa
       processingMs: v.processingMs,
       questionnaire: answers,
       quality: evaluateQuality(answers),
+      supplier: (() => {
+        const s = supplierByName.get(v.name.trim().toLowerCase());
+        if (!s) return null;
+        return {
+          id: s.id,
+          verificationStatus: s.verificationStatus,
+          verificationNote: s.verificationNote,
+          city: s.city,
+          gstin: s.gstin,
+          paymentTerms: s.paymentTerms,
+          onTimeDeliveryPct: s.onTimeDeliveryPct,
+          history: s.participation
+            .map((p) => ({
+              externalId: p.procurement.externalId,
+              title: p.procurement.title,
+              category: p.procurement.category,
+              completedAt: p.procurement.completedAt.toISOString().slice(0, 10),
+              result: p.result,
+              performance: p.performance,
+              qualityIncidents: p.qualityIncidents,
+              awardValueInr: p.procurement.awardValueInr,
+              awardedVendorName: p.procurement.awardedVendorName,
+            }))
+            .sort((a, b) => b.completedAt.localeCompare(a.completedAt)),
+        };
+      })(),
     };
   });
 

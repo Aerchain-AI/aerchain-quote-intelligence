@@ -50,7 +50,17 @@ export async function buildComparisonWorkbook(rfxId: string): Promise<Buffer> {
       const q = getQuote(dataset, v.id, li.id);
       // "Not quoted" as a word, never a blank and never a zero. A blank cell in
       // a spreadsheet becomes a zero the moment anyone sums the column.
-      row.push(!q || q.status === "not_quoted" || q.evaluatedValue == null ? "Not quoted" : q.evaluatedValue);
+      // Two different absences, two different words. A vendor that gave a price
+      // on a basis we would not convert has not left the line unpriced, and a
+      // buyer reading this column would otherwise go and ask for a price that
+      // is already on the vendor's page.
+      row.push(
+        q && q.status !== "not_quoted" && q.evaluatedValue == null && q.sourceValue != null
+          ? `Not comparable (quoted ${q.sourceValue} ${q.sourceCurrency ?? ""} ${q.sourceUnit ?? ""})`.trim()
+          : !q || q.status === "not_quoted" || q.evaluatedValue == null
+            ? "Not quoted"
+            : q.evaluatedValue,
+      );
     }
     rows.push(row);
   }
@@ -151,6 +161,10 @@ export async function buildComparisonWorkbook(rfxId: string): Promise<Buffer> {
     [],
     ["Evaluated INR/unit", "Landed per-unit cost after currency conversion, unit normalisation and stated discounts."],
     ["Not quoted", "The vendor did not price this line. It is not zero, and it must not be summed as zero."],
+    [
+      "Not comparable",
+      "The vendor did price this line, on a basis this system would not convert. The quoted figure is shown beside the label. It is excluded from every total rather than guessed at, and it is not a missing price.",
+    ],
     ["Column totals", `Cover only the items each vendor priced. ${vendors.filter((v) => dataset.lineItems.some((li) => { const q = getQuote(dataset, v.id, li.id); return !q || q.evaluatedValue == null; })).length} vendor(s) have gaps, so their totals are not like-for-like.`],
     ["Ranking", "Vendors are only ranked against each other on the basket they all priced. See the award memo."],
     ["Quality verdict", 'Only an explicit "no" disqualifies. A blank answer is unresolved, and is left for the buyer to settle.'],
@@ -247,6 +261,15 @@ export async function buildAwardMemoPdf(rfxId: string): Promise<Buffer> {
   doc.text(`Total evaluated cost:  INR ${inr(award.totalEvaluatedCost)}`);
   if (award.savings != null) {
     doc.text(`Estimated saving:  INR ${inr(award.savings)}  ${award.savingsBaselineLabel ?? ""}`);
+    // The baseline itself, not only its name. A saving whose starting figure is
+    // missing cannot be checked by the person reading the memo, which is the
+    // one thing an award memo has to survive.
+    if (award.singleVendorOption?.total != null) {
+      doc.text(
+        `Baseline compared against:  INR ${inr(award.singleVendorOption.total)} ` +
+          `(all ${award.totalLineItems} items from ${award.singleVendorOption.vendorName})`,
+      );
+    }
   }
   doc.text(`Awarded:  ${award.awardedItemCount} of ${award.totalLineItems} line items`);
   doc.text(`Quality-qualified vendors:  ${award.qualityQualifiedVendorCount} of ${dataset.vendors.length}`);

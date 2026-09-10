@@ -247,14 +247,14 @@ function OptionRow({
               <>
                 <span className="num font-medium text-[var(--ink)]">{formatInr(o.ownBasketTotal)}</span>
                 <span className="ml-1 text-[11px]" style={{ color: "var(--warning)" }}>
-                  not comparable — {o.itemsMissing} unpriced
+                  not comparable — {o.itemsWithoutComparablePrice} without a comparable price
                 </span>
               </>
             )}
           </span>
 
           <span className="num text-[11.5px] text-[var(--ink-muted)]">
-            {o.itemsQuoted} priced{o.itemsMissing > 0 ? `, ${o.itemsMissing} missing` : ""}
+            {o.itemsQuoted} comparable{o.itemsWithoutComparablePrice > 0 ? `, ${o.itemsWithoutComparablePrice} not` : ""}
           </span>
 
           {o.deltaVsRecommended != null && o.deltaVsRecommended !== 0 && (

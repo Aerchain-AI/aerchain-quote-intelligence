@@ -35,7 +35,7 @@ export interface AwardOption {
   /** Total over what this vendor actually priced. Not comparable across vendors. */
   ownBasketTotal: number;
   itemsQuoted: number;
-  itemsMissing: number;
+  itemsWithoutComparablePrice: number;
 
   /** Against the recommended total, on the same basket. Positive means dearer. */
   deltaVsRecommended: number | null;
@@ -144,7 +144,7 @@ export async function buildAwardOptions(dataset: ComparisonDataset): Promise<Awa
         const q = getQuote(dataset, vendor.id, li.id);
         return !!q && q.status !== "not_quoted" && q.evaluatedValue != null;
       }).length;
-    const itemsMissing = dataset.lineItems.length - itemsQuoted;
+    const itemsWithoutComparablePrice = dataset.lineItems.length - itemsQuoted;
 
     let ownBasketTotal = total?.ownBasketTotal ?? 0;
     if (!total) {
@@ -171,8 +171,11 @@ export async function buildAwardOptions(dataset: ComparisonDataset): Promise<Awa
 
     const vendorExceptions = dataset.exceptions.filter((e) => e.vendorId === vendor.id);
     const flags: AwardOption["flags"] = [];
-    if (itemsMissing > 0) {
-      flags.push({ label: `${itemsMissing} item(s) unpriced`, tone: "critical" });
+    if (itemsWithoutComparablePrice > 0) {
+      flags.push({
+        label: `${itemsWithoutComparablePrice} item(s) without a comparable price`,
+        tone: "critical",
+      });
     }
     if (vendorExceptions.some((e) => e.type === "missing_freight")) {
       flags.push({ label: "Freight not stated", tone: "warning" });
@@ -227,7 +230,7 @@ export async function buildAwardOptions(dataset: ComparisonDataset): Promise<Awa
       comparableTotal,
       ownBasketTotal,
       itemsQuoted,
-      itemsMissing,
+      itemsWithoutComparablePrice,
       deltaVsRecommended: delta,
       deltaPct,
       qualityStatus: vendor.quality.status,

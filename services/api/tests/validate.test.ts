@@ -5,7 +5,7 @@ import { normalizeQuote } from "../src/pipeline/normalize.js";
 import {
   buildDocumentLevelExceptions,
   buildImplicitMissingTaxException,
-  buildQualityException,
+  buildQualityExceptions,
   summarizeVendor,
   validateLine,
 } from "../src/pipeline/validate.js";
@@ -111,7 +111,7 @@ describe("buildImplicitMissingTaxException", () => {
   });
 });
 
-describe("buildQualityException", () => {
+describe("buildQualityExceptions", () => {
   const allPass: ExtractedQuestionnaireResponse[] = [1, 2, 3, 5, 6, 7, 8].map((id) => ({
     questionId: id,
     answerText: "Yes",
@@ -119,21 +119,29 @@ describe("buildQualityException", () => {
     confidence: 0.9,
   }));
 
-  it("returns null when every gating question passes", () => {
-    expect(buildQualityException(allPass)).toBeNull();
+  it("raises nothing when every gating question passes", () => {
+    expect(buildQualityExceptions(allPass)).toEqual([]);
   });
 
-  it("flags a vendor that failed a gating question", () => {
+  it("flags a vendor that answered no to a gating question", () => {
     const withFailure = allPass.map((r) => (r.questionId === 1 ? { ...r, passFail: false, answerText: "No" } : r));
-    const result = buildQualityException(withFailure);
-    expect(result).not.toBeNull();
-    expect(result?.type).toBe("quality_failure");
+    const result = buildQualityExceptions(withFailure);
+    expect(result.map((e) => e.type)).toEqual(["quality_failure"]);
   });
 
-  it("treats an unanswered gating question as a failure", () => {
+  it("reports an unanswered gating question as unresolved, not failed", () => {
     const withBlank = allPass.filter((r) => r.questionId !== 7);
-    const result = buildQualityException(withBlank);
-    expect(result).not.toBeNull();
+    const result = buildQualityExceptions(withBlank);
+    expect(result.map((e) => e.type)).toEqual(["quality_unresolved"]);
+    expect(result[0].message).toMatch(/unknown, not failed/i);
+  });
+
+  it("separates the two when a vendor both refused one and skipped another", () => {
+    const mixed = allPass
+      .map((r) => (r.questionId === 1 ? { ...r, passFail: false, answerText: "No" } : r))
+      .filter((r) => r.questionId !== 7);
+    const result = buildQualityExceptions(mixed);
+    expect(result.map((e) => e.type).sort()).toEqual(["quality_failure", "quality_unresolved"]);
   });
 });
 

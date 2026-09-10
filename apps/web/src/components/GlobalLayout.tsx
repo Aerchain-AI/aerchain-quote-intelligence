@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import type { DemoProfile } from "../lib/auth";
-import { ChatProvider } from "../lib/ChatContext";
+import { ChatProvider, useGlobalChat } from "../lib/ChatContext";
 import GlobalChat from "./GlobalChat";
 import Icon, { type IconName } from "./Icon";
 
@@ -23,6 +23,27 @@ const NAV: Array<{ name: string; to: string; icon: IconName }> = [
 ];
 
 export default function GlobalLayout({ children, session, onLogout }: GlobalLayoutProps) {
+  return (
+    <ChatProvider>
+      <Shell session={session} onLogout={onLogout}>
+        {children}
+      </Shell>
+    </ChatProvider>
+  );
+}
+
+/**
+ * Inside the provider, so the shell can react to the conversation.
+ *
+ * When a thread is open the content column moves across to sit beside the chat
+ * rail rather than under it. A panel that covers the comparison a question is
+ * about defeats the point of asking.
+ */
+function Shell({ children, session, onLogout }: GlobalLayoutProps) {
+  const { thread, activeContext } = useGlobalChat();
+  // The RFx builder places the composer inside its own column, so there is no
+  // bottom bar to leave room for.
+  const builderOwnsChat = activeContext.entityType === "builder";
   const location = useLocation();
 
   // "/events" also owns "/events/123", but not "/events/new", which has its own link.
@@ -37,7 +58,6 @@ export default function GlobalLayout({ children, session, onLogout }: GlobalLayo
   };
 
   return (
-    <ChatProvider>
       <div className="flex min-h-[100dvh]" style={{ background: "var(--canvas)" }}>
         <a href="#main" className="skip-link">
           Skip to content
@@ -133,12 +153,17 @@ export default function GlobalLayout({ children, session, onLogout }: GlobalLayo
 
         {/* A div, not a <main> — the screens rendered inside own that element,
             and nesting two of them is invalid. This is just the offset column. */}
-        <div id="main" className="relative flex w-full flex-1 flex-col pb-24 pl-60">
+        <div
+          id="main"
+          className={`relative flex w-full flex-1 flex-col ${
+            thread.length > 0 ? "pb-6" : builderOwnsChat ? "pl-60" : "pl-60 pb-24"
+          }`}
+          style={thread.length > 0 ? { paddingLeft: "calc(15rem + var(--chat-rail, 380px))" } : undefined}
+        >
           {children}
         </div>
 
         <GlobalChat />
       </div>
-    </ChatProvider>
   );
 }

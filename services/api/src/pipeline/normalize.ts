@@ -113,6 +113,15 @@ export interface NormalizedQuote {
   unitRecognized: boolean;
   /** True when no unit was stated and the RFx unit was taken as the basis. */
   unitAssumed: boolean;
+  /**
+   * What the vendor's price was divided by to reach the RFx unit.
+   *
+   * 1 means the two bases already agreed. Anything else changed the number the
+   * buyer compares, which is a thing to say out loud: a rate per hundred read as
+   * a rate per piece is a hundredfold difference, and it looks exactly like a
+   * vendor being very cheap.
+   */
+  unitFactor: number;
 }
 
 const BASE_CURRENCY: Currency = "INR";
@@ -136,6 +145,7 @@ export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineIt
       tax,
       unitRecognized: false,
       unitAssumed: false,
+      unitFactor: 1,
     };
   }
 
@@ -159,6 +169,7 @@ export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineIt
       tax,
       unitRecognized: false,
       unitAssumed: false,
+      unitFactor: 1,
     };
   }
 
@@ -190,5 +201,6 @@ export function normalizeQuote(extracted: ExtractedLineItem, rfxLineItem: LineIt
     tax,
     unitRecognized: true,
     unitAssumed: assumed === true,
+    unitFactor: factor,
   };
 }

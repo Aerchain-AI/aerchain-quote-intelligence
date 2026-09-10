@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /**
  * Charts for the analyst conversation.
@@ -30,6 +30,46 @@ export interface BarDatum {
   note?: string;
   /** Portion of the bar that is genuinely absent rather than zero. */
   incomplete?: boolean;
+}
+
+/**
+ * The chart's own width in CSS pixels.
+ *
+ * These charts used to draw into a fixed 640-unit viewBox stretched to fit with
+ * preserveAspectRatio="none", which scales the text as well as the bars: the
+ * same chart read wide and thin in the old bottom bar and squashed to
+ * illegibility once the conversation moved into a 380px rail. Measuring the
+ * container and drawing at 1 unit per pixel keeps every label at its true size,
+ * and lets the label column and the value gutter shrink with the space actually
+ * available rather than a number picked for one layout.
+ */
+function useChartWidth() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(Math.round(el.getBoundingClientRect().width));
+    const observer = new ResizeObserver((entries) => {
+      const next = Math.round(entries[0].contentRect.width);
+      setWidth((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, width };
+}
+
+/** Roughly how many characters fit in a pixel width at the label size. */
+function fitChars(px: number, fontSize: number) {
+  return Math.max(6, Math.floor(px / (fontSize * 0.52)));
+}
+
+function clip(label: string, px: number, fontSize: number) {
+  const max = fitChars(px, fontSize);
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
 }
 
 export function ChartFrame({
@@ -77,19 +117,34 @@ export function BarChart({
   gap?: number;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
-  if (data.length === 0) return null;
+  const { ref, width: measured } = useChartWidth();
 
   const max = Math.max(...data.map((d) => Math.abs(d.value)), 1);
-  const height = data.length * (barHeight + gap) - gap;
-  const plotLeft = maxLabelWidth + 12;
+  const height = Math.max(data.length * (barHeight + gap) - gap, 1);
+
+  // Until the container has been measured there is no honest place to put a
+  // bar, so the row height is reserved and nothing is drawn.
+  const W = measured || 0;
+  const narrow = W > 0 && W < 440;
+  const labelSize = narrow ? 10.5 : 11.5;
+  const valueSize = narrow ? 10.5 : 11.5;
+  const labelWidth = Math.min(maxLabelWidth, Math.max(64, W * 0.32));
+  // The gutter is sized from the longest value that has to sit in it, not from
+  // a fraction of the width: a crore-scale total needs the same room at any
+  // rail width, and a clipped number is worse than a shorter bar.
+  const longestValue = Math.max(...data.map((d) => d.display.length), 4);
+  const valueGutter = Math.min(W * 0.45, longestValue * valueSize * 0.62 + 14);
+  const plotLeft = labelWidth + 12;
+  const span = Math.max(24, W - plotLeft - valueGutter);
+
+  if (data.length === 0) return null;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <svg
         width="100%"
         height={height}
-        viewBox={`0 0 640 ${height}`}
-        preserveAspectRatio="none"
+        viewBox={`0 0 ${W || 640} ${height}`}
         role="img"
         aria-label={`Bar chart: ${data.map((d) => `${d.label} ${d.display}`).join(", ")}`}
       >
@@ -102,9 +157,9 @@ export function BarChart({
           </pattern>
         </defs>
 
-        {data.map((d, i) => {
+        {W > 0 && data.map((d, i) => {
           const y = i * (barHeight + gap);
-          const width = Math.max(2, (Math.abs(d.value) / max) * (640 - plotLeft - 96));
+          const width = Math.max(2, (Math.abs(d.value) / max) * span);
           const isHovered = hovered === i;
           const fill = d.highlight ? "var(--good)" : "var(--ink)";
           return (
@@ -115,17 +170,17 @@ export function BarChart({
               style={{ cursor: "default" }}
             >
               {/* Hit target spans the row, not just the mark. */}
-              <rect x="0" y={y - gap / 2} width="640" height={barHeight + gap} fill="transparent" />
+              <rect x="0" y={y - gap / 2} width={W} height={barHeight + gap} fill="transparent" />
 
               <text
-                x={maxLabelWidth}
+                x={labelWidth}
                 y={y + barHeight / 2}
                 textAnchor="end"
                 dominantBaseline="central"
-                className="fill-[var(--ink-secondary)] text-[11.5px]"
-                style={{ fontSize: 11.5 }}
+                className="fill-[var(--ink-secondary)]"
+                style={{ fontSize: labelSize }}
               >
-                {d.label.length > 26 ? `${d.label.slice(0, 25)}…` : d.label}
+                {clip(d.label, labelWidth, labelSize)}
               </text>
 
               <rect
@@ -138,15 +193,22 @@ export function BarChart({
                 opacity={isHovered ? 1 : 0.88}
               />
               {d.incomplete && (
-                <rect x={plotLeft + width} y={y} width="26" height={barHeight} rx="3" fill="url(#chart-missing)" />
+                <rect
+                  x={plotLeft + width}
+                  y={y}
+                  width={narrow ? 16 : 26}
+                  height={barHeight}
+                  rx="3"
+                  fill="url(#chart-missing)"
+                />
               )}
 
               <text
-                x={plotLeft + width + (d.incomplete ? 34 : 8)}
+                x={plotLeft + width + (d.incomplete ? (narrow ? 22 : 34) : 8)}
                 y={y + barHeight / 2}
                 dominantBaseline="central"
                 className="fill-[var(--ink)]"
-                style={{ fontSize: 11.5, fontFamily: "var(--font-mono, monospace)", fontWeight: 500 }}
+                style={{ fontSize: valueSize, fontFamily: "var(--font-mono, monospace)", fontWeight: 500 }}
               >
                 {d.display}
               </text>
@@ -184,15 +246,25 @@ export function BeforeAfterChart({
   beforeLabel: string;
   afterLabel: string;
 }) {
-  if (rows.length === 0) return null;
+  const { ref, width: measured } = useChartWidth();
   const max = Math.max(...rows.flatMap((r) => [r.before, r.after]), 1);
   const barHeight = 13;
   const rowHeight = barHeight * 2 + 6 + 14;
-  const height = rows.length * rowHeight;
-  const plotLeft = 180;
+  const height = Math.max(rows.length * rowHeight, 1);
+
+  const W = measured || 0;
+  const narrow = W > 0 && W < 440;
+  const labelSize = narrow ? 10.5 : 11.5;
+  const valueSize = narrow ? 9.5 : 10.5;
+  const plotLeft = Math.min(180, Math.max(72, W * 0.34));
+  const longestValue = Math.max(...rows.flatMap((r) => [r.beforeDisplay.length, r.afterDisplay.length]), 4);
+  const valueGutter = Math.min(W * 0.45, longestValue * valueSize * 0.62 + 14);
+  const span = Math.max(24, W - plotLeft - valueGutter);
+
+  if (rows.length === 0) return null;
 
   return (
-    <div>
+    <div ref={ref}>
       <div className="mb-2.5 flex items-center gap-4 text-[11px] text-[var(--ink-secondary)]">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-2.5 rounded-[2px]" style={{ background: "var(--line-strong)" }} />
@@ -203,10 +275,10 @@ export function BeforeAfterChart({
           {afterLabel}
         </span>
       </div>
-      <svg width="100%" height={height} viewBox={`0 0 640 ${height}`} preserveAspectRatio="none" role="img">
-        {rows.map((r, i) => {
+      <svg width="100%" height={height} viewBox={`0 0 ${W || 640} ${height}`} role="img">
+        {W > 0 && rows.map((r, i) => {
           const y = i * rowHeight;
-          const w = (v: number) => Math.max(2, (v / max) * (640 - plotLeft - 100));
+          const w = (v: number) => Math.max(2, (v / max) * span);
           return (
             <g key={r.label + i}>
               <text
@@ -215,9 +287,9 @@ export function BeforeAfterChart({
                 textAnchor="end"
                 dominantBaseline="central"
                 className="fill-[var(--ink-secondary)]"
-                style={{ fontSize: 11.5 }}
+                style={{ fontSize: labelSize }}
               >
-                {r.label.length > 24 ? `${r.label.slice(0, 23)}…` : r.label}
+                {clip(r.label, plotLeft - 12, labelSize)}
               </text>
               <rect x={plotLeft} y={y} width={w(r.before)} height={barHeight} rx="2.5" fill="var(--line-strong)" />
               <text
@@ -225,7 +297,7 @@ export function BeforeAfterChart({
                 y={y + barHeight / 2}
                 dominantBaseline="central"
                 className="fill-[var(--ink-muted)]"
-                style={{ fontSize: 10.5, fontFamily: "var(--font-mono, monospace)" }}
+                style={{ fontSize: valueSize, fontFamily: "var(--font-mono, monospace)" }}
               >
                 {r.beforeDisplay}
               </text>
@@ -242,7 +314,7 @@ export function BeforeAfterChart({
                 y={y + barHeight + 3 + barHeight / 2}
                 dominantBaseline="central"
                 className="fill-[var(--ink)]"
-                style={{ fontSize: 10.5, fontFamily: "var(--font-mono, monospace)", fontWeight: 500 }}
+                style={{ fontSize: valueSize, fontFamily: "var(--font-mono, monospace)", fontWeight: 500 }}
               >
                 {r.afterDisplay}
               </text>

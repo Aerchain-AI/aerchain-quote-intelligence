@@ -44,6 +44,21 @@ export function validateLine(extracted: ExtractedLineItem, normalized: Normalize
     });
   }
 
+  // A basis we did convert. The arithmetic is exact, but the buyer is comparing
+  // a number that is not the one on the vendor's page, and a hundredfold change
+  // reads as a hundredfold discount unless it is stated.
+  if (normalized.unitRecognized && normalized.unitFactor !== 1) {
+    exceptions.push({
+      lineItemId,
+      type: "different_unit",
+      message:
+        `Quoted per "${extracted.sourceUnit ?? "unspecified"}" and converted to a rate per ` +
+        `${normalized.normalizedUnit} by dividing by ${normalized.unitFactor}. ` +
+        `Confirm the basis before reading this line as cheaper than the others.`,
+      severity: "warning",
+    });
+  }
+
   if (!normalized.unitRecognized) {
     // Quoted, but the unit couldn't be confidently reconciled with the RFx unit —
     // distinct from "not quoted at all": we know a price exists, just not how to
@@ -145,23 +160,49 @@ export function buildImplicitMissingTaxException(
  * The LLM decides whether an individual answer reads as pass/fail/unclear; this
  * function only applies the fixed "any gating question failing gates the vendor"
  * rule (PRD §21's "Vendor B — failed quality criterion"). */
-export function buildQualityException(questionnaire: ExtractedQuestionnaireResponse[]): ExceptionDraft | null {
-  const failures: string[] = [];
+export function buildQualityExceptions(
+  questionnaire: ExtractedQuestionnaireResponse[],
+): ExceptionDraft[] {
+  const failed: string[] = [];
+  const unanswered: string[] = [];
+
   for (const qid of QUALITY_GATING_QUESTION_IDS) {
     const response = questionnaire.find((r) => r.questionId === qid);
     const question = QUESTIONNAIRE_QUESTIONS.find((q) => q.id === qid)!;
-    const unanswered = !response || !response.answerText?.trim();
-    if (unanswered || response?.passFail === false) {
-      failures.push(`"${question.text}" — ${unanswered ? "left unanswered" : `answered "${response!.answerText}"`}`);
+    if (!response || !response.answerText?.trim()) {
+      unanswered.push(`"${question.text}"`);
+    } else if (response.passFail === false) {
+      failed.push(`"${question.text}" — answered "${response.answerText}"`);
     }
   }
-  if (failures.length === 0) return null;
-  return {
-    lineItemId: null,
-    type: "quality_failure",
-    message: `Failed ${failures.length} quality questionnaire criterion(s): ${failures.join("; ")}.`,
-    severity: "warning",
-  };
+
+  const drafts: ExceptionDraft[] = [];
+
+  // A vendor that said no has ruled itself out on that criterion.
+  if (failed.length > 0) {
+    drafts.push({
+      lineItemId: null,
+      type: "quality_failure",
+      message: `Answered no to ${failed.length} gating quality criterion(s): ${failed.join("; ")}.`,
+      severity: "warning",
+    });
+  }
+
+  // A vendor that said nothing has not. Reporting silence as a failure rejects a
+  // supplier on grounds the buyer never agreed to, and it is the same mistake as
+  // showing zero for an item nobody priced: an absence read as an answer.
+  if (unanswered.length > 0) {
+    drafts.push({
+      lineItemId: null,
+      type: "quality_unresolved",
+      message:
+        `${unanswered.length} gating quality criterion(s) left unanswered: ${unanswered.join("; ")}. ` +
+        `Unknown, not failed — ask the vendor before treating this as a disqualification.`,
+      severity: "warning",
+    });
+  }
+
+  return drafts;
 }
 
 export interface VendorSummary {
