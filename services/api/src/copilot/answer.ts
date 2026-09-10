@@ -20,6 +20,7 @@ import {
   readCachedAnswer,
   writeCachedAnswer,
 } from "./cache.js";
+import { describeCalculation, fallbackPlan } from "./fallback.js";
 import {
   PLAN_SYSTEM_PROMPT,
   PLAN_TOOL,
@@ -31,6 +32,11 @@ export interface CopilotAnswer {
   question: string;
   /** True when the LLM stages were served from cache; the calculation is always fresh. */
   cached?: boolean;
+  /**
+   * Set when the language model could not be reached and the answer was routed
+   * and written by the system itself. The figures are unaffected either way.
+   */
+  degraded?: { stage: "routing" | "explanation" | "both"; reason: string };
   interpretation: string;
   analysisType: string;
   /** The exact deterministic output the answer is based on — shown as "view calculation". */
@@ -340,10 +346,19 @@ export async function answerQuestion(
     return { ...cached, cached: true };
   }
 
-  const plan = await planAnalysis(
-    question,
-    dataset.vendors.map((v) => v.name),
-  );
+  // The model routes the question and writes the answer up. It computes none of
+  // the figures, so when it is unreachable the right outcome is a plainer
+  // answer, not no answer.
+  const vendorNames = dataset.vendors.map((v) => v.name);
+  let routingFailure: string | null = null;
+  let plan: AnalysisPlan;
+  try {
+    plan = await planAnalysis(question, vendorNames);
+  } catch (err) {
+    routingFailure = (err as Error).message;
+    plan = fallbackPlan(question, vendorNames);
+  }
+
   const executed = executeAnalysis(dataset, plan);
 
   if (!executed.supported) {
@@ -362,7 +377,24 @@ export async function answerQuestion(
     return unsupported;
   }
 
-  const answer = await explainResult(question, plan, executed.calculation);
+  let answer: string;
+  let explanationFailure: string | null = null;
+  try {
+    answer = await explainResult(question, plan, executed.calculation);
+  } catch (err) {
+    explanationFailure = (err as Error).message;
+    answer = describeCalculation(plan, executed.calculation);
+  }
+
+  const degraded =
+    routingFailure && explanationFailure
+      ? { stage: "both" as const, reason: explanationFailure }
+      : routingFailure
+        ? { stage: "routing" as const, reason: routingFailure }
+        : explanationFailure
+          ? { stage: "explanation" as const, reason: explanationFailure }
+          : undefined;
+
   const result: CopilotAnswer = {
     question,
     interpretation: plan.interpretation,
@@ -371,7 +403,12 @@ export async function answerQuestion(
     answer,
     caveats: executed.caveats,
     supported: true,
+    ...(degraded ? { degraded } : {}),
   };
-  await writeCachedAnswer(dataset.rfxId, dataVersion, question, result);
+
+  // A degraded answer is not cached. The figures in it are correct, but the
+  // prose is the system's own and should be replaced by the real explanation the
+  // next time the same question is asked and the model is up.
+  if (!degraded) await writeCachedAnswer(dataset.rfxId, dataVersion, question, result);
   return result;
 }

@@ -327,6 +327,11 @@ export interface CopilotAnswer {
   answer: string;
   caveats: string[];
   supported: boolean;
+  /**
+   * Present when the language model was unreachable and this answer was routed
+   * and written by the system itself. Every figure is still the engine's.
+   */
+  degraded?: { stage: "routing" | "explanation" | "both"; reason: string };
 }
 
 export interface AwardRecommendation {
@@ -739,9 +744,20 @@ export const api = {
 
 export function formatInr(value: number | null | undefined, opts: { decimals?: boolean } = {}): string {
   if (value == null) return "—";
+
+  // A real price that rounds away to zero is the one number this system must
+  // never print. A unit rate of ₹0.40 shown as ₹0 reads as "nobody priced it",
+  // which is the exact confusion every other rule here exists to prevent — and
+  // it appeared on the line the engine had flagged as the thing to go and check.
+  // Below a rupee the paise are shown whatever the caller asked for, and below a
+  // paisa the figure falls back to significant digits rather than a row of noughts.
+  if (value !== 0 && Math.abs(value) < 0.005) {
+    return `₹${value.toLocaleString("en-IN", { maximumSignificantDigits: 2 })}`;
+  }
+  const decimals = opts.decimals === true || (value !== 0 && Math.abs(value) < 1);
   return `₹${value.toLocaleString("en-IN", {
-    minimumFractionDigits: opts.decimals ? 2 : 0,
-    maximumFractionDigits: opts.decimals ? 2 : 0,
+    minimumFractionDigits: decimals ? 2 : 0,
+    maximumFractionDigits: decimals ? 2 : 0,
   })}`;
 }
 

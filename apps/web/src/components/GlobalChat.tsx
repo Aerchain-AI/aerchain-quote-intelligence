@@ -109,6 +109,19 @@ export default function GlobalChat() {
                     <p className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--ink-secondary)]">
                       {turn.answer}
                     </p>
+                    {turn.full?.degraded && (
+                      /* Not an error. The figures are the engine's either way;
+                         what is missing is the sentences the model would have
+                         written around them, and saying so is more useful than
+                         a red panel that throws the answer away. */
+                      <p
+                        className="mt-2 rounded-md px-2 py-1.5 text-[11px] leading-relaxed"
+                        style={{ background: "var(--surface-sunken)", color: "var(--ink-secondary)" }}
+                      >
+                        Written by the system, not the language model, which could not be reached. Every figure above
+                        is computed by the engine and is unaffected.
+                      </p>
+                    )}
                     {turn.full && (
                       <div className="mt-3 empty:hidden">
                         <AnalysisChart answer={turn.full} />
