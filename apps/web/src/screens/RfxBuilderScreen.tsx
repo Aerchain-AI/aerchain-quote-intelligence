@@ -641,6 +641,83 @@ export default function RfxBuilderScreen() {
     [messages, request, buyerNotes, confirmedItems, draft, answers, freeText, clarify],
   );
 
+  /**
+   * Redraw the item list around something the buyer just said.
+   *
+   * Before the proposal exists there is still a draft on screen: the item list
+   * waiting to be confirmed. Typing "I need 30 line items" against a list of 5
+   * used to file the sentence as a note and leave all 5 sitting there, which
+   * reads as an assistant taking dictation rather than doing the work. The
+   * request goes back to the same drafting step that produced the list, with
+   * everything the buyer has said so far attached, and the canvas is replaced
+   * with what comes back.
+   */
+  const refineItems = useCallback(
+    async (note: string) => {
+      const original = messages.find((m) => m.type === "user-request")?.text ?? request;
+      const notes = buyerNotes.includes(note) ? buyerNotes : [...buyerNotes, note];
+      const combined = [original, ...notes.map((n) => `Additionally: ${n}`)].filter(Boolean).join("\n\n");
+
+      const spinnerId = nextMsgId();
+      pushMessage({ id: spinnerId, role: "system", type: "clarifying-spinner" });
+
+      try {
+        const result = await api.clarifyRfx(combined);
+        const items = result.itemsDraft ?? [];
+
+        setClarify(result);
+        // The list changed, so any earlier confirmation of it no longer applies.
+        setConfirmedItems([]);
+        setStage("items_draft");
+
+        setCanvasCards((prev) => {
+          const next = prev.map((card) => {
+            if (card.type === "extraction-summary") return { ...card, payload: result };
+            if (card.type === "item-draft") {
+              // A fresh id, not just a fresh payload. The item table seeds its
+              // editable state from its props once, on mount, so that a buyer
+              // editing a cell does not have it overwritten underneath them.
+              // Replacing the whole list is the one case where that is exactly
+              // what should happen, and a new key is how React is told so.
+              return {
+                ...card,
+                id: nextMsgId(),
+                payload: { items, category: result.detectedCategory, isConfirmed: false },
+              };
+            }
+            return card;
+          });
+          // Anything that followed the item list was built on the old one.
+          return next.filter(
+            (c) => c.type === "extraction-summary" || c.type === "item-draft" || c.type === "prior-procurement",
+          );
+        });
+
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== spinnerId),
+          {
+            id: nextMsgId(),
+            role: "system" as const,
+            type: "ai-text" as const,
+            text: `✓ Redrafted the item list around that — **${items.length} line item(s)** now on the canvas.\n\nReview them and confirm when they look right.`,
+          },
+        ]);
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== spinnerId),
+          {
+            id: nextMsgId(),
+            role: "system" as const,
+            type: "error" as const,
+            text: `${(err as Error).message}\n\nThe item list is unchanged, and your requirement is recorded either way.`,
+          },
+        ]);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages, request, buyerNotes],
+  );
+
   const handleUserMutation = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -688,8 +765,14 @@ export default function RfxBuilderScreen() {
         return;
       }
 
-      // Before the draft is written there is nothing to rewrite. The requirement
-      // is held and handed to the model when the draft is generated.
+      // Before the proposal exists, the thing on screen is the item list, so
+      // that is what a refinement should change.
+      if (clarify) {
+        void refineItems(trimmed);
+        return;
+      }
+
+      // Nothing drafted at all yet. The requirement is held for the first draft.
       pushMessage({
         id: nextMsgId(),
         role: "system",
@@ -699,7 +782,7 @@ export default function RfxBuilderScreen() {
           : `✓ Recorded: “${trimmed}”\n\nIt goes into the draft when the terms are settled, and to every supplier with the invitation.`,
       });
     },
-    [draft, redraftWith]
+    [draft, clarify, redraftWith, refineItems]
   );
 
   // Register workspace command handler with ChatContext
