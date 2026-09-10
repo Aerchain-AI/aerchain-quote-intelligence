@@ -718,6 +718,99 @@ export default function RfxBuilderScreen() {
     [messages, request, buyerNotes],
   );
 
+  /**
+   * Copy a past event's line items into the draft being written.
+   *
+   * The precedent card used to be a link. Clicking the one thing on screen that
+   * says "you have bought this before" navigated away to that event, discarded
+   * the draft in progress, and offered no way to use what it had just found.
+   * The buyer was shown the answer and then walked away from their own work.
+   *
+   * Reuse happens here instead, on this screen. The items land in the same
+   * editable table every other draft lands in, unconfirmed, so they are read
+   * and corrected before anything is created. Nothing is committed by copying.
+   */
+  const reuseItemsFrom = useCallback(
+    async (source: SimilarRfx) => {
+      const spinnerId = nextMsgId();
+      pushMessage({ id: spinnerId, role: "system", type: "clarifying-spinner" });
+
+      try {
+        const detail = await api.getRfx(source.id);
+        const items: DraftLineItem[] = (detail.lineItems ?? []).map((li) => ({
+          name: li.name,
+          specification: li.specification,
+          quantity: li.quantity,
+          unit: li.unit,
+        }));
+
+        if (items.length === 0) {
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== spinnerId),
+            {
+              id: nextMsgId(),
+              role: "system" as const,
+              type: "ai-text" as const,
+              text: `**${source.name}** holds no line items, so there is nothing to copy. Your draft is unchanged.`,
+            },
+          ]);
+          return;
+        }
+
+        setConfirmedItems([]);
+        setStage("items_draft");
+        setCanvasCards((prev) =>
+          prev
+            .map((card) =>
+              card.type === "item-draft"
+                ? {
+                    ...card,
+                    // New key: the table seeds its rows once, on mount.
+                    id: nextMsgId(),
+                    payload: {
+                      items,
+                      category: source.category,
+                      isConfirmed: false,
+                      sourceLabel: `Copied from ${source.name}`,
+                    },
+                  }
+                : card,
+            )
+            // The commercial terms and any proposal were settled against the
+            // list that has just been replaced, so they no longer describe
+            // anything on this canvas. The precedent cards stay: the buyer may
+            // want to copy from a different one.
+            .filter((c) => c.type !== "commercial-terms" && c.type !== "draft-preview"),
+        );
+        setDraft(null);
+
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== spinnerId),
+          {
+            id: nextMsgId(),
+            role: "system" as const,
+            type: "ai-text" as const,
+            text:
+              `✓ Copied **${items.length} line item(s)** from **${source.name}** into your draft.\n\n` +
+              `Nothing is created yet. Change quantities, specifications or units on the canvas, ` +
+              `then confirm the list →`,
+          },
+        ]);
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== spinnerId),
+          {
+            id: nextMsgId(),
+            role: "system" as const,
+            type: "error" as const,
+            text: `${(err as Error).message}\n\nYour draft is unchanged.`,
+          },
+        ]);
+      }
+    },
+    [],
+  );
+
   const handleUserMutation = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -970,6 +1063,7 @@ export default function RfxBuilderScreen() {
                     createRfx={createRfx}
                     stage={stage}
                     terms={settledTerms()}
+                    onReuseItems={reuseItemsFrom}
                     onDraftChange={applyDraftEdit}
                     onTermChange={applyTermEdit}
                     navigate={navigate}
@@ -1093,6 +1187,7 @@ interface CanvasRenderContext {
   createRfx: () => void;
   stage: Stage;
   terms: SettledTerm[];
+  onReuseItems: (source: SimilarRfx) => void;
   onDraftChange: (next: RfxDraft) => void;
   onTermChange: (key: string, answer: string) => void;
 }
@@ -1109,11 +1204,18 @@ function CanvasCardRenderer(ctx: CanvasRenderContext) {
           initialItems={card.payload.items}
           category={card.payload.category}
           isConfirmed={card.payload.isConfirmed}
+          sourceLabel={card.payload.sourceLabel}
           onConfirm={ctx.onConfirmItemList}
         />
       );
     case "similar-events":
-      return <SimilarEventsCanvas key={card.id} similar={card.payload as SimilarRfx[]} navigate={ctx.navigate} />;
+      return (
+        <SimilarEventsCanvas
+          key={card.id}
+          similar={card.payload as SimilarRfx[]}
+          onReuse={ctx.onReuseItems}
+        />
+      );
     case "prior-procurement":
       return <PriorProcurementCanvas key={card.id} records={card.payload as SimilarPastProcurement[]} />;
     case "commercial-terms":
@@ -1200,11 +1302,14 @@ function InteractiveItemDraftCanvas({
   initialItems,
   category,
   isConfirmed,
+  sourceLabel,
   onConfirm,
 }: {
   initialItems: DraftLineItem[];
   category: string;
   isConfirmed?: boolean;
+  /** Set when the list was copied rather than drafted, e.g. from a past event. */
+  sourceLabel?: string;
   onConfirm: (items: DraftLineItem[]) => void;
 }) {
   const [items, setItems] = useState<DraftLineItem[]>(initialItems);
@@ -1242,7 +1347,9 @@ function InteractiveItemDraftCanvas({
             <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">
               {isConfirmed
                 ? "Line items verified and confirmed"
-                : `${items.length} AI-drafted items. Review, edit, then confirm.`}
+                : sourceLabel
+                  ? `${sourceLabel}. ${items.length} items. Review, edit, then confirm — nothing is created until you do.`
+                  : `${items.length} AI-drafted items. Review, edit, then confirm.`}
             </p>
           </div>
         </div>
@@ -1440,10 +1547,10 @@ function PriorProcurementCanvas({ records }: { records: SimilarPastProcurement[]
 // Similar Events Card
 function SimilarEventsCanvas({
   similar,
-  navigate,
+  onReuse,
 }: {
   similar: SimilarRfx[];
-  navigate: ReturnType<typeof useNavigate>;
+  onReuse: (source: SimilarRfx) => void;
 }) {
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-sm overflow-hidden">
@@ -1456,17 +1563,15 @@ function SimilarEventsCanvas({
         </span>
         <div>
           <p className="text-[13px] font-semibold text-[var(--ink)]">Historical Precedent Match</p>
-          <p className="text-[11px] text-[var(--ink-muted)]">Past events matching confirmed items</p>
+          <p className="text-[11px] text-[var(--ink-muted)]">
+            Reuse the item list, or open the event to read it. Copying does not create anything.
+          </p>
         </div>
       </div>
       <div className="divide-y divide-[var(--line)]">
         {similar.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => navigate(`/events/${s.id}/overview`)}
-            className="block w-full px-5 py-3 text-left transition-colors hover:bg-[var(--accent-soft)]/40"
-          >
-            <div className="flex items-center justify-between">
+          <div key={s.id} className="px-5 py-3">
+            <div className="flex items-center justify-between gap-3">
               <span className="text-[13px] font-semibold text-[var(--ink)]">{s.name}</span>
               <span className="rounded-full bg-[var(--good-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--good)] border border-[var(--good-line)] uppercase">
                 {s.status}
@@ -1475,7 +1580,32 @@ function SimilarEventsCanvas({
             <p className="mt-0.5 text-[12px] text-[var(--ink-muted)]">
               {s.category} · {s.lineItemCount} items · {s.buyerName ?? "unattributed"}
             </p>
-          </button>
+            {s.sampleLineItems.length > 0 && (
+              <p className="mt-1 text-[11.5px] text-[var(--ink-secondary)]">
+                {s.sampleLineItems.slice(0, 3).join(", ")}
+                {s.lineItemCount > 3 ? `, and ${s.lineItemCount - 3} more` : ""}
+              </p>
+            )}
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={() => onReuse(s)}
+                disabled={s.lineItemCount === 0}
+                className="pressable rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink-inverse)] hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Reuse these {s.lineItemCount} items
+              </button>
+              {/* A new tab, deliberately. Reading the old event should never cost
+                  the buyer the draft they are in the middle of writing. */}
+              <a
+                href={`/events/${s.id}/overview`}
+                target="_blank"
+                rel="noreferrer"
+                className="pressable rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+              >
+                Open in a new tab
+              </a>
+            </div>
+          </div>
         ))}
       </div>
     </div>
