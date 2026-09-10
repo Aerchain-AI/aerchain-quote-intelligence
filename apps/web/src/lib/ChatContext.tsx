@@ -225,7 +225,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       switch (intent.type) {
         case "sourcing_request": {
           // Clear any prior draft and auto-route to builder with prompt
-          sessionStorage.removeItem("qic.rfx.inProgress");
           navigate(`/events/new?fresh=true&prompt=${encodeURIComponent(text)}`);
           break;
         }
@@ -248,7 +247,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         default: {
           // If text looks procurement-ish, route to builder anyway
           if (text.length > 10) {
-            sessionStorage.removeItem("qic.rfx.inProgress");
             navigate(`/events/new?fresh=true&prompt=${encodeURIComponent(text)}`);
           }
           break;

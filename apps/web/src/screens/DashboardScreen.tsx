@@ -4,11 +4,15 @@ import { useFigureExplainer } from "../components/ExplainFigure";
 import Icon from "../components/Icon";
 import ProcurementHistory from "../components/ProcurementHistory";
 import { api, formatInr, type PortfolioMetrics, type Rfx } from "../lib/api";
+import { listDrafts, removeDraft, type StoredDraft } from "../lib/rfxDrafts";
 
 export default function DashboardScreen() {
   const [rfxs, setRfxs] = useState<Rfx[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // RFx drafts the buyer started and did not finish. They are not events and
+  // never reach the server, so they are read straight from the browser.
+  const [drafts, setDrafts] = useState<StoredDraft[]>([]);
   const navigate = useNavigate();
 
   const loadEvents = () => {
@@ -21,6 +25,7 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     loadEvents();
+    setDrafts(listDrafts());
   }, []);
 
   // Sort PENDING and DRAFT events to the top
@@ -59,9 +64,15 @@ export default function DashboardScreen() {
     api.getPortfolioMetrics().then(setMetrics).catch(() => setMetrics(null));
   }, []);
 
+  // Starting a new one no longer discards the one in progress: it keeps its own
+  // id and stays in the list below.
   const handleStartFresh = () => {
-    sessionStorage.removeItem("qic.rfx.inProgress");
     navigate("/events/new?fresh=true");
+  };
+
+  const discardDraft = (id: string) => {
+    removeDraft(id);
+    setDrafts(listDrafts());
   };
 
   return (
@@ -82,6 +93,58 @@ export default function DashboardScreen() {
           <Icon name="spark" size={13} /> New RFx event
         </button>
       </div>
+
+      {/* Unfinished drafts.
+          A draft abandoned halfway used to exist only in the tab it was typed
+          in, and clicking "New RFx" deleted it without asking. It is the most
+          expensive thing on this screen to lose: the conversation, the item
+          list, and every correction made by hand. */}
+      {drafts.length > 0 && (
+        <div className="panel overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
+            <div>
+              <p className="text-[13px] font-semibold text-[var(--ink)]">Unfinished RFx drafts</p>
+              <p className="mt-0.5 text-[11.5px] text-[var(--ink-muted)]">
+                Saved in this browser. Nothing has been created from them yet.
+              </p>
+            </div>
+            <span className="num text-[12px] text-[var(--ink-muted)]">{drafts.length}</span>
+          </div>
+          <ul className="divide-y divide-[var(--line)]">
+            {drafts.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium text-[var(--ink)]">{d.title}</p>
+                  <p className="mt-0.5 text-[11.5px] text-[var(--ink-muted)]">
+                    {d.stageLabel}
+                    {d.itemCount > 0 ? ` · ${d.itemCount} item(s)` : ""} · last edited{" "}
+                    {new Date(d.updatedAt).toLocaleString("en-IN", {
+                      day: "numeric",
+                      month: "short",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={() => navigate(`/events/new?draft=${encodeURIComponent(d.id)}`)}
+                    className="pressable rounded-md bg-[var(--accent)] px-3 py-1.5 text-[12px] font-medium text-[var(--ink-inverse)] hover:bg-[var(--accent-hover)]"
+                  >
+                    Continue
+                  </button>
+                  <button
+                    onClick={() => discardDraft(d.id)}
+                    className="pressable rounded-md border border-[var(--line-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ink-secondary)] hover:text-[var(--critical)]"
+                  >
+                    Discard
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-5">

@@ -89,7 +89,6 @@ function Shell({ children, session, onLogout }: GlobalLayoutProps) {
                   to={link.to === "/events/new" ? "/events/new?fresh=true" : link.to}
                   aria-current={active ? "page" : undefined}
                   onClick={() => {
-                    if (link.to === "/events/new") sessionStorage.removeItem("qic.rfx.inProgress");
                   }}
                   className="pressable group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium"
                   style={{

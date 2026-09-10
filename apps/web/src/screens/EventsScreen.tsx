@@ -141,7 +141,6 @@ export default function EventsScreen() {
   }, [events.length]);
 
   const handleStartFresh = () => {
-    sessionStorage.removeItem("qic.rfx.inProgress");
     navigate("/events/new?fresh=true");
   };
 

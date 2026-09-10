@@ -3,6 +3,7 @@ import Icon from "../components/Icon";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button, ErrorState, Spinner } from "../components/ui";
 import { ChatComposer, PaneResizer, usePaneWidth } from "../components/ChatComposer";
+import { loadDraft, mostRecentDraftId, newDraftId, removeDraft, saveDraft } from "../lib/rfxDrafts";
 import { useGlobalChat } from "../lib/ChatContext";
 import { getSession } from "../lib/auth";
 import {
@@ -14,6 +15,7 @@ import {
   type DraftLineItem,
   type RfxDraft,
   type SimilarPastProcurement,
+  type RfxDetail,
   type SimilarRfx,
 } from "../lib/api";
 
@@ -38,7 +40,6 @@ function nextMsgId(): string {
   return `msg-${++_msgId}-${Date.now()}`;
 }
 
-const DRAFT_STATE_KEY = "qic.rfx.inProgress";
 type Stage = "idle" | "clarifying" | "items_draft" | "questions" | "drafting" | "draft";
 
 // Canvas card types — rendered in the right pane
@@ -71,13 +72,17 @@ interface PersistedState {
   buyerNotes: string[];
   /** Terms the buyer rewrote by hand in the preview, keyed by term. */
   termOverrides: Record<string, string>;
+  /** Currency carried over from an imported past event. */
+  importedCurrency: string | null;
+  /** Terms carried over from an imported past event. */
+  importedTerms: Array<{ question: string; answer: string }>;
 }
 
-function loadPersisted(): PersistedState | null {
+function loadPersisted(id: string): PersistedState | null {
   try {
-    const raw = sessionStorage.getItem(DRAFT_STATE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedState;
+    const stored = loadDraft<PersistedState>(id);
+    if (!stored) return null;
+    const parsed = stored.state;
     if (parsed.stage === "clarifying" || parsed.stage === "drafting") {
       parsed.stage = parsed.clarify ? "questions" : "idle";
     }
@@ -92,16 +97,36 @@ function loadPersisted(): PersistedState | null {
   }
 }
 
-function savePersisted(state: PersistedState): void {
-  try {
-    sessionStorage.setItem(DRAFT_STATE_KEY, JSON.stringify(state));
-  } catch { /* no-op */ }
+const STAGE_LABELS: Record<Stage, string> = {
+  idle: "Not started",
+  clarifying: "Reading the request",
+  items_draft: "Item review",
+  questions: "Commercial terms",
+  drafting: "Drafting the proposal",
+  draft: "Final review",
+};
+
+function savePersisted(id: string, state: PersistedState): void {
+  // Titled by what the buyer typed, because that is what they will recognise in
+  // a list a week later — not "Draft 3".
+  const firstRequest = state.messages.find((m) => m.type === "user-request")?.text;
+  const title = state.draft?.name || firstRequest || state.request || "Untitled RFx draft";
+  saveDraft<PersistedState>({
+    id,
+    title: title.length > 90 ? `${title.slice(0, 89)}\u2026` : title,
+    stageLabel: STAGE_LABELS[state.stage] ?? state.stage,
+    itemCount:
+      state.draft?.lineItems.length ||
+      state.confirmedItems.length ||
+      // The list on the canvas counts too: an import clears the confirmed list
+      // on purpose, and a draft holding 30 unconfirmed items is not an empty one.
+      (state.canvasCards.find((c) => c.type === "item-draft")?.payload?.items?.length ?? 0),
+    state,
+  });
 }
 
-function clearPersisted(): void {
-  try {
-    sessionStorage.removeItem(DRAFT_STATE_KEY);
-  } catch { /* no-op */ }
+function clearPersisted(id: string): void {
+  removeDraft(id);
 }
 
 /** A condition of the quote, with the handle the preview edits it by. */
@@ -150,7 +175,21 @@ export default function RfxBuilderScreen() {
   const promptParam = searchParams.get("prompt");
 
   // Restored state
-  const restored = useMemo(() => (isFresh ? null : loadPersisted()), [isFresh]);
+  // Which draft this screen is editing. An explicit ?draft= resumes that one,
+  // "New RFx" starts another and leaves the old one in the list, and a bare
+  // visit picks up whatever was last touched.
+  const draftIdRef = useRef<string>("");
+  if (!draftIdRef.current) {
+    const requested = searchParams.get("draft");
+    draftIdRef.current = requested || (isFresh ? newDraftId() : mostRecentDraftId() || newDraftId());
+  }
+  const draftId = draftIdRef.current;
+
+  const restored = useMemo(
+    () => (isFresh && !searchParams.get("draft") ? null : loadPersisted(draftId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isFresh, draftId],
+  );
   const [request, setRequest] = useState(restored?.request ?? "");
   const [stage, setStage] = useState<Stage>(restored?.stage ?? "idle");
   const [clarify, setClarify] = useState<ClarifyResult | null>(restored?.clarify ?? null);
@@ -171,6 +210,17 @@ export default function RfxBuilderScreen() {
   const [termOverrides, setTermOverrides] = useState<Record<string, string>>(
     restored?.termOverrides ?? {},
   );
+
+  // Conditions carried over from a past event the buyer chose to import: its
+  // currency, and the terms it was run under. Held apart from the buyer's own
+  // answers so the summary can say where each one came from, and so importing
+  // twice replaces rather than accumulates.
+  const [importedCurrency, setImportedCurrency] = useState<string | null>(
+    restored?.importedCurrency ?? null,
+  );
+  const [importedTerms, setImportedTerms] = useState<Array<{ question: string; answer: string }>>(
+    restored?.importedTerms ?? [],
+  );
   const [stageError, setStageError] = useState<string | null>(null);
 
   // Chat messages (left pane)
@@ -186,7 +236,6 @@ export default function RfxBuilderScreen() {
   // Reset state if fresh query param is present
   useEffect(() => {
     if (isFresh) {
-      clearPersisted();
       setRequest("");
       setStage("idle");
       setClarify(null);
@@ -198,8 +247,11 @@ export default function RfxBuilderScreen() {
       setCanvasCards([]);
       setBuyerNotes([]);
       setTermOverrides({});
+      setImportedCurrency(null);
+      setImportedTerms([]);
       autoExecutedRef.current = false;
-      // Strip fresh param but keep prompt param
+      // Strip fresh param but keep prompt param. The draft that was on screen
+      // before is not deleted: it kept its own id and is still in the list.
       if (promptParam) {
         navigate(`${location.pathname}?prompt=${encodeURIComponent(promptParam)}`, { replace: true });
       } else {
@@ -233,11 +285,11 @@ export default function RfxBuilderScreen() {
   // Persist state
   useEffect(() => {
     if (stage === "idle" && !clarify && !draft && !request.trim() && messages.length === 0) {
-      clearPersisted();
+      clearPersisted(draftId);
       return;
     }
-    savePersisted({ request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards, buyerNotes, termOverrides });
-  }, [request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards, buyerNotes, termOverrides]);
+    savePersisted(draftId, { request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards, buyerNotes, termOverrides, importedCurrency, importedTerms });
+  }, [request, stage, clarify, confirmedItems, answers, freeText, draft, messages, canvasCards, buyerNotes, termOverrides, importedCurrency, importedTerms]);
 
   const activeBuyer = useMemo(
     () => buyers.find((b) => b.id === activeBuyerId) ?? null,
@@ -449,6 +501,7 @@ export default function RfxBuilderScreen() {
       [
         ...buildAnswers(),
         ...buyerNotes.map((note) => ({ question: "Stated by you", answer: note })),
+        ...importedTerms.map((t) => ({ question: `${t.question} (imported)`, answer: t.answer })),
       ]
         .map((t, i) => {
           const key = `${i}:${t.question}`;
@@ -458,7 +511,7 @@ export default function RfxBuilderScreen() {
           (t) => t.answer && t.answer.trim() && t.answer.trim().toLowerCase() !== "not specified",
         ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answers, freeText, clarify, buyerNotes, termOverrides],
+    [answers, freeText, clarify, buyerNotes, termOverrides, importedTerms],
   );
 
   /**
@@ -498,6 +551,10 @@ export default function RfxBuilderScreen() {
 
       if (confirmedItems.length > 0) {
         result.lineItems = confirmedItems;
+      }
+      // An imported currency is the buyer's decision, not the model's guess.
+      if (importedCurrency) {
+        result.currency = importedCurrency;
       }
 
       setDraft(result);
@@ -555,7 +612,7 @@ export default function RfxBuilderScreen() {
         sourceRequest,
         clarifications: termsForApi(),
       });
-      clearPersisted();
+      clearPersisted(draftId);
       navigate(`/events/${result.id}/overview`);
     } catch (err) {
       setStageError((err as Error).message);
@@ -575,7 +632,9 @@ export default function RfxBuilderScreen() {
     setCanvasCards([]);
     setBuyerNotes([]);
     setTermOverrides({});
-    clearPersisted();
+    setImportedCurrency(null);
+    setImportedTerms([]);
+    clearPersisted(draftId);
   };
 
   /**
@@ -731,27 +790,62 @@ export default function RfxBuilderScreen() {
    * and corrected before anything is created. Nothing is committed by copying.
    */
   const reuseItemsFrom = useCallback(
-    async (source: SimilarRfx) => {
+    async (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => {
       const spinnerId = nextMsgId();
       pushMessage({ id: spinnerId, role: "system", type: "clarifying-spinner" });
 
       try {
-        const detail = await api.getRfx(source.id);
-        const items: DraftLineItem[] = (detail.lineItems ?? []).map((li) => ({
-          name: li.name,
-          specification: li.specification,
-          quantity: li.quantity,
-          unit: li.unit,
-        }));
+        const items: DraftLineItem[] = parts.items
+          ? (detail.lineItems ?? []).map((li) => ({
+              name: li.name,
+              specification: li.specification,
+              quantity: li.quantity,
+              unit: li.unit,
+            }))
+          : [];
 
-        if (items.length === 0) {
+        const brought: string[] = [];
+        if (parts.currency) {
+          setImportedCurrency(detail.currency);
+          setAnswers((prev) => ({ ...prev, currency: [detail.currency] }));
+          setDraft((prev) => (prev ? { ...prev, currency: detail.currency } : prev));
+          brought.push(`currency **${detail.currency}**`);
+        }
+        if (parts.terms) {
+          const terms = (detail.clarifications ?? []).filter(
+            (t) => t.answer && t.answer.trim() && t.answer.trim().toLowerCase() !== "not specified",
+          );
+          setImportedTerms(terms);
+          if (terms.length > 0) brought.push(`**${terms.length}** commercial and delivery term(s)`);
+        }
+
+        if (parts.items && items.length === 0) {
           setMessages((prev) => [
             ...prev.filter((m) => m.id !== spinnerId),
             {
               id: nextMsgId(),
               role: "system" as const,
               type: "ai-text" as const,
-              text: `**${source.name}** holds no line items, so there is nothing to copy. Your draft is unchanged.`,
+              text: `**${source.name}** holds no line items, so there is nothing to import. Your draft is unchanged.`,
+            },
+          ]);
+          return;
+        }
+
+        if (items.length > 0) brought.unshift(`**${items.length}** line item(s)`);
+
+        if (!parts.items) {
+          // Terms or currency only: the item list on the canvas is untouched, so
+          // nothing about it should be reset.
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== spinnerId),
+            {
+              id: nextMsgId(),
+              role: "system" as const,
+              type: "ai-text" as const,
+              text:
+                `✓ Imported ${brought.join(" and ")} from **${source.name}**.\n\n` +
+                `They appear in the requirement summary and can be edited there before you create anything.`,
             },
           ]);
           return;
@@ -791,8 +885,8 @@ export default function RfxBuilderScreen() {
             role: "system" as const,
             type: "ai-text" as const,
             text:
-              `✓ Copied **${items.length} line item(s)** from **${source.name}** into your draft.\n\n` +
-              `Nothing is created yet. Change quantities, specifications or units on the canvas, ` +
+              `✓ Imported ${brought.join(", ")} from **${source.name}**.\n\n` +
+              `Nothing is created yet. Change quantities, specifications, units or terms, ` +
               `then confirm the list →`,
           },
         ]);
@@ -1187,7 +1281,7 @@ interface CanvasRenderContext {
   createRfx: () => void;
   stage: Stage;
   terms: SettledTerm[];
-  onReuseItems: (source: SimilarRfx) => void;
+  onReuseItems: (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => void;
   onDraftChange: (next: RfxDraft) => void;
   onTermChange: (key: string, answer: string) => void;
 }
@@ -1545,15 +1639,28 @@ function PriorProcurementCanvas({ records }: { records: SimilarPastProcurement[]
 }
 
 // Similar Events Card
+/**
+ * Past events that match what is being drafted, opened in place.
+ *
+ * This was a link, and that was the whole problem: it navigated away to the
+ * event, discarded the draft in progress, and offered no way to use what it
+ * had just found. A buyer cannot decide whether to reuse something they have
+ * not read, and reading it should not cost them their work.
+ *
+ * So the event opens here. The full item list, the currency it was quoted in
+ * and the terms it was run under are all on screen before anything is chosen,
+ * and the buyer picks which of those three to bring across. Whatever is brought
+ * lands unconfirmed and editable, exactly as a drafted list does.
+ */
 function SimilarEventsCanvas({
   similar,
   onReuse,
 }: {
   similar: SimilarRfx[];
-  onReuse: (source: SimilarRfx) => void;
+  onReuse: (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => void;
 }) {
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-sm overflow-hidden">
+    <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-sm">
       <div className="flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--warning-soft)] px-5 py-3">
         <span
           className="flex h-6 w-6 items-center justify-center rounded-lg"
@@ -1564,50 +1671,211 @@ function SimilarEventsCanvas({
         <div>
           <p className="text-[13px] font-semibold text-[var(--ink)]">Historical Precedent Match</p>
           <p className="text-[11px] text-[var(--ink-muted)]">
-            Reuse the item list, or open the event to read it. Copying does not create anything.
+            Open one to read it in full, then choose what to bring across. Importing creates nothing.
           </p>
         </div>
       </div>
       <div className="divide-y divide-[var(--line)]">
         {similar.map((s) => (
-          <div key={s.id} className="px-5 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[13px] font-semibold text-[var(--ink)]">{s.name}</span>
-              <span className="rounded-full bg-[var(--good-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--good)] border border-[var(--good-line)] uppercase">
-                {s.status}
-              </span>
-            </div>
-            <p className="mt-0.5 text-[12px] text-[var(--ink-muted)]">
-              {s.category} · {s.lineItemCount} items · {s.buyerName ?? "unattributed"}
-            </p>
-            {s.sampleLineItems.length > 0 && (
-              <p className="mt-1 text-[11.5px] text-[var(--ink-secondary)]">
-                {s.sampleLineItems.slice(0, 3).join(", ")}
-                {s.lineItemCount > 3 ? `, and ${s.lineItemCount - 3} more` : ""}
-              </p>
-            )}
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                onClick={() => onReuse(s)}
-                disabled={s.lineItemCount === 0}
-                className="pressable rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink-inverse)] hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Reuse these {s.lineItemCount} items
-              </button>
-              {/* A new tab, deliberately. Reading the old event should never cost
-                  the buyer the draft they are in the middle of writing. */}
-              <a
-                href={`/events/${s.id}/overview`}
-                target="_blank"
-                rel="noreferrer"
-                className="pressable rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
-              >
-                Open in a new tab
-              </a>
-            </div>
-          </div>
+          <PrecedentRow key={s.id} source={s} onReuse={onReuse} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Which parts of a past event the buyer chose to bring across. */
+interface ImportParts {
+  items: boolean;
+  currency: boolean;
+  terms: boolean;
+}
+
+function PrecedentRow({
+  source,
+  onReuse,
+}: {
+  source: SimilarRfx;
+  onReuse: (source: SimilarRfx, detail: RfxDetail, parts: ImportParts) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<RfxDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [parts, setParts] = useState<ImportParts>({ items: true, currency: true, terms: true });
+
+  const toggle = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (detail || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setDetail(await api.getRfx(source.id));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const terms = (detail?.clarifications ?? []).filter(
+    (t) => t.answer && t.answer.trim() && t.answer.trim().toLowerCase() !== "not specified",
+  );
+  const nothingChosen = !parts.items && !parts.currency && !parts.terms;
+
+  return (
+    <div className="px-5 py-3">
+      <button onClick={toggle} className="flex w-full items-center justify-between gap-3 text-left">
+        <span className="min-w-0">
+          <span className="block text-[13px] font-semibold text-[var(--ink)]">{source.name}</span>
+          <span className="mt-0.5 block text-[12px] text-[var(--ink-muted)]">
+            {source.category} · {source.lineItemCount} items · {source.currency} ·{" "}
+            {source.buyerName ?? "unattributed"}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="rounded-full border border-[var(--good-line)] bg-[var(--good-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase text-[var(--good)]">
+            {source.status}
+          </span>
+          <span className="text-[11px] font-medium text-[var(--ink-secondary)]">
+            {open ? "Close" : "Open"}
+          </span>
+        </span>
+      </button>
+
+      {open && (
+        <div
+          className="animate-fade-up mt-3 rounded-lg px-4 py-3"
+          style={{ border: "1px solid var(--line)", background: "var(--surface-sunken)" }}
+        >
+          {loading && <p className="text-[12px] text-[var(--ink-muted)]">Opening the event…</p>}
+          {error && (
+            <p className="text-[12px]" style={{ color: "var(--critical)" }}>
+              {error}
+            </p>
+          )}
+
+          {detail && (
+            <>
+              <p className="text-[12.5px] leading-relaxed text-[var(--ink-secondary)]">{detail.description}</p>
+
+              <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1 text-[12px]">
+                <dt className="text-[var(--ink-muted)]">Quotation currency</dt>
+                <dd className="num font-medium text-[var(--ink)]">{detail.currency}</dd>
+                <dt className="text-[var(--ink-muted)]">Required by</dt>
+                <dd className="font-medium text-[var(--ink)]">
+                  {new Date(detail.requiredByDate).toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </dd>
+                <dt className="text-[var(--ink-muted)]">Raised by</dt>
+                <dd className="font-medium text-[var(--ink)]">{detail.buyer?.name ?? "unattributed"}</dd>
+              </dl>
+
+              {terms.length > 0 && (
+                <div className="mt-3 border-t border-[var(--line)] pt-2.5">
+                  <p className="eyebrow">Commercial &amp; delivery terms</p>
+                  <dl className="mt-1.5 space-y-1 text-[12px]">
+                    {terms.map((t, i) => (
+                      <div key={i} className="grid grid-cols-[auto_1fr] gap-x-4">
+                        <dt className="text-[var(--ink-muted)]">{t.question}</dt>
+                        <dd className="font-medium text-[var(--ink)]">{t.answer}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )}
+
+              <div className="mt-3 border-t border-[var(--line)] pt-2.5">
+                <p className="eyebrow">Line items ({detail.lineItems?.length ?? 0})</p>
+                <div className="thin-scroll mt-1.5 max-h-56 overflow-y-auto rounded-md border border-[var(--line)] bg-[var(--surface)]">
+                  <table className="w-full text-left text-[11.5px]">
+                    <thead className="sticky top-0 border-b border-[var(--line)] bg-[var(--surface-sunken)] text-[10px] uppercase text-[var(--ink-muted)]">
+                      <tr>
+                        <th className="px-2.5 py-1.5">Item</th>
+                        <th className="px-2.5 py-1.5">Specification</th>
+                        <th className="px-2.5 py-1.5 text-right">Qty</th>
+                        <th className="px-2.5 py-1.5">Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--line)]">
+                      {(detail.lineItems ?? []).map((li) => (
+                        <tr key={li.id}>
+                          <td className="px-2.5 py-1.5 font-medium text-[var(--ink)]">{li.name}</td>
+                          <td className="px-2.5 py-1.5 text-[var(--ink-muted)]">{li.specification}</td>
+                          <td className="num px-2.5 py-1.5 text-right text-[var(--ink-secondary)]">
+                            {li.quantity.toLocaleString("en-IN")}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-[var(--ink-muted)]">{li.unit}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Chosen part by part, because reordering the same basket on new
+                  terms and repeating last year's terms for a different basket
+                  are both ordinary things to want. */}
+              <div className="mt-3 border-t border-[var(--line)] pt-2.5">
+                <p className="eyebrow">Bring across</p>
+                <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1.5">
+                  {(
+                    [
+                      ["items", `Line items (${detail.lineItems?.length ?? 0})`, (detail.lineItems?.length ?? 0) === 0],
+                      ["currency", `Currency (${detail.currency})`, false],
+                      ["terms", `Commercial terms (${terms.length})`, terms.length === 0],
+                    ] as Array<[keyof ImportParts, string, boolean]>
+                  ).map(([key, label, disabled]) => (
+                    <label
+                      key={key}
+                      className={`flex items-center gap-1.5 text-[12px] ${
+                        disabled ? "cursor-not-allowed text-[var(--ink-muted)]" : "cursor-pointer text-[var(--ink)]"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={disabled}
+                        checked={!disabled && parts[key]}
+                        onChange={(e) => setParts((prev) => ({ ...prev, [key]: e.target.checked }))}
+                        className="h-3.5 w-3.5 accent-[var(--accent)]"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+
+                <div className="mt-2.5 flex items-center gap-2">
+                  <button
+                    onClick={() => onReuse(source, detail, parts)}
+                    disabled={nothingChosen}
+                    className="pressable rounded-md bg-[var(--accent)] px-3 py-1.5 text-[12px] font-medium text-[var(--ink-inverse)] hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Import into this draft
+                  </button>
+                  <a
+                    href={`/events/${source.id}/overview`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="pressable rounded-md border border-[var(--line-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+                  >
+                    Open the full event
+                  </a>
+                </div>
+                <p className="mt-1.5 text-[11px] text-[var(--ink-muted)]">
+                  Everything imported stays editable and has to be confirmed before the RFx is created.
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
