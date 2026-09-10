@@ -1,6 +1,20 @@
+# One service, not two.
+#
+# The front end calls the API at the relative path /api, so it has to be served
+# from the same origin as the API. A separate static site would request
+# https://<static-host>/api/... where nothing is listening, and every screen
+# would render its empty state with no error a viewer could act on. In
+# production the API process serves apps/web/dist itself, so one web service
+# covers the whole prototype on one URL.
+#
+# The build produces the front end and the API together; the API restores the
+# committed demo database on a cold start, so a fresh instance comes up with the
+# sourcing events, vendor responses and supplier history already in place.
 services:
-  # Backend API Service
   - type: web
+    # Kept as the original name on purpose: renaming a service in a Blueprint
+    # makes Render create a new one beside the old, and the URL already shared
+    # with anyone is this one.
     name: aerchain-api
     env: node
     plan: free
@@ -12,20 +26,10 @@ services:
         value: production
       - key: NODE_VERSION
         value: 22.16.0
+      # Resolved relative to services/api/prisma, beside the committed snapshot.
       - key: DATABASE_URL
         value: file:./dev.db
+      # Set in the Render dashboard. Without it the pre-extracted demo data still
+      # loads; only new extractions and the copilot need a live key.
       - key: GEMINI_API_KEYS
         sync: false
-
-  # Frontend Web Service
-  - type: web
-    name: aerchain-web
-    env: static
-    buildCommand: npm install --include=dev && npm run build
-    staticPublishPath: apps/web/dist
-    envVars:
-      - key: VITE_API_URL
-        fromService:
-          type: web
-          name: aerchain-api
-          envVarKey: RENDER_EXTERNAL_URL
