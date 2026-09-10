@@ -14,6 +14,7 @@ export type AnalysisType =
   | "quality_standing"
   | "vendor_history"
   | "award_recommendation"
+  | "savings_sensitivity"
   | "commercial_terms"
   | "scenario_discount"
   | "unsupported";
@@ -57,6 +58,7 @@ export const PLAN_TOOL: FunctionDeclaration = {
           "quality_standing",
           "vendor_history",
           "award_recommendation",
+          "savings_sensitivity",
           "commercial_terms",
           "scenario_discount",
           "unsupported",
@@ -82,7 +84,10 @@ export const PLAN_TOOL: FunctionDeclaration = {
           "single-vendor award, and every verification that must happen first; choose this for 'who should we award " +
           "to', 'what do you recommend', 'can we award the cheapest vendor', 'what could make this wrong', or any " +
           "question about the decision itself rather than about one number. " +
-          "commercial_terms: payment terms and lead times. " +
+          "savings_sensitivity: how much of the headline saving rests on values that were converted, assumed, or " +
+          "contradicted by the other responses \u2014 choose this for 'how much of the saving depends on this', " +
+          "'what happens if this price is wrong', 'how much rests on that number', or any question about how solid " +
+          "the saving is. commercial_terms: payment terms and lead times. " +
           "scenario_discount: re-rank assuming one vendor gives an extra percentage discount. unsupported: the data cannot answer this.",
       },
       requireQualityPass: {

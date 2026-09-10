@@ -151,6 +151,55 @@ export default function AnalysisChart({ answer }: { answer: CopilotAnswer }) {
       );
     }
 
+    // -------------------------------------------------- savings sensitivity
+    case "savings_sensitivity": {
+      const atRisk =
+        (calc.atRisk as Array<{ lineItemId: number; lineItemName: string; savingContribution: number; sharePct: number }> | undefined) ??
+        [];
+      const total = calc.totalSaving as number | null;
+      if (total == null) return null;
+
+      // Two kinds of bar, one measure: what each doubtful line earns, against
+      // what the saving keeps regardless. Sorted biggest first, because that is
+      // the order the buyer works through them in.
+      const data = [
+        ...atRisk.map((r) => ({
+          label: `#${r.lineItemId} ${r.lineItemName}`,
+          value: r.savingContribution,
+          display: `${formatInr(r.savingContribution)} (${r.sharePct}%)`,
+        })),
+        {
+          label: "Not resting on a flagged value",
+          value: (calc.unaffectedTotal as number) ?? 0,
+          display: formatInr((calc.unaffectedTotal as number) ?? 0),
+          highlight: true,
+        },
+      ].filter((d) => d.value > 0);
+
+      if (data.length === 0) return null;
+
+      return (
+        <ChartFrame
+          title={`What the ${formatInr(total)} saving rests on`}
+          caption="Exposure, not error. A bar is the part of the saving earned on a line whose price was converted, assumed, or contradicted by the other responses. Confirming those lines is what makes the total defensible."
+          action={toggle}
+        >
+          <BarChart data={data} />
+          {showTable && (
+            <ChartTable
+              columns={["Line", "Saving it earns", "Share", "Why it is flagged"]}
+              rows={atRisk.map((r) => [
+                `#${r.lineItemId} ${r.lineItemName}`,
+                formatInr(r.savingContribution),
+                `${r.sharePct}%`,
+                ((r as unknown as { reasons: string[] }).reasons ?? []).join("; "),
+              ])}
+            />
+          )}
+        </ChartFrame>
+      );
+    }
+
     // ------------------------------------------------------ response coverage
     case "incomplete_responses": {
       const gaps =

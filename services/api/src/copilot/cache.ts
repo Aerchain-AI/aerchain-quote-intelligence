@@ -21,7 +21,7 @@ import type { CopilotAnswer } from "./answer.js";
  * kept being served after it — the copilot went on repeating a defect that had
  * already been corrected, which is worse than not caching at all.
  */
-const CALC_CONTRACT_VERSION = "12";
+const CALC_CONTRACT_VERSION = "13";
 
 /** Changes whenever any vendor's extraction is re-run, or the maths changes. */
 export function dataVersionFor(dataset: ComparisonDataset): string {

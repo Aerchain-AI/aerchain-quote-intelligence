@@ -9,6 +9,7 @@ import {
   splitAward,
   comparabilityReport,
   qualityStanding,
+  savingsSensitivity,
   summarizeExceptions,
   vendorHistory,
   vendorRiskProfile,
@@ -211,6 +212,9 @@ export function executeAnalysis(
     }
     case "award_recommendation": {
       return { calculation: buildAwardRecommendation(dataset), caveats: [], supported: true };
+    }
+    case "savings_sensitivity": {
+      return { calculation: savingsSensitivity(dataset, constraints), caveats: [], supported: true };
     }
     case "vendor_history": {
       const report = vendorHistory(dataset, plan.vendorName);

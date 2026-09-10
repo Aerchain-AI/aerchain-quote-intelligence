@@ -917,6 +917,144 @@ export function vendorHistory(dataset: ComparisonDataset, focusVendorName?: stri
   };
 }
 
+// ------------------------------------------------------- savings sensitivity
+
+export interface SavingsSensitivity {
+  totalSaving: number | null;
+  baselineVendorName: string | null;
+  awardedLines: number;
+  /** Awarded lines whose saving rests on a value this system has flagged. */
+  atRisk: Array<{
+    lineItemId: number;
+    lineItemName: string;
+    vendorName: string;
+    quantity: number;
+    unit: string;
+    evaluatedUnitPrice: number;
+    savingContribution: number;
+    sharePct: number;
+    reasons: string[];
+  }>;
+  atRiskTotal: number;
+  atRiskSharePct: number;
+  unaffectedTotal: number;
+  note: string;
+}
+
+/**
+ * How much of the headline saving would move if a doubtful price turned out to
+ * be wrong.
+ *
+ * A saving is a sum of line-level differences, and those differences are not
+ * equally solid. Some rest on a price quoted plainly in the buyer's own
+ * currency and unit; others rest on a conversion this system performed, a unit
+ * it had to assume, or a figure the rest of the market contradicts. Reporting
+ * only the total treats those as the same fact, and they are not: one number
+ * can be defended in a review and the other cannot until somebody checks it.
+ *
+ * Nothing here is a judgement about whether a price is wrong. It measures
+ * exposure — what is riding on values that have already been flagged elsewhere
+ * in this system, so a buyer knows which phone call is worth making first.
+ */
+export function savingsSensitivity(
+  dataset: ComparisonDataset,
+  constraints: EligibilityConstraints = { requireQualityPass: true },
+): SavingsSensitivity {
+  const split = splitAward(dataset, constraints);
+  const { lines } = cheapestPerLine(dataset, constraints);
+  const baselineId = split.bestSingleVendorId;
+
+  if (!baselineId || split.bestSingleVendorTotal == null) {
+    return {
+      totalSaving: null,
+      baselineVendorName: null,
+      awardedLines: 0,
+      atRisk: [],
+      atRiskTotal: 0,
+      atRiskSharePct: 0,
+      unaffectedTotal: 0,
+      note: "No single qualified vendor could cover every awarded item, so there is no baseline and no saving to be sensitive about.",
+    };
+  }
+
+  const outliers = new Set(detectPriceOutliers(dataset).map((o) => `${o.vendorId}:${o.lineItemId}`));
+
+  let totalSaving = 0;
+  let awardedLines = 0;
+  const atRisk: SavingsSensitivity["atRisk"] = [];
+
+  for (const line of lines) {
+    if (!line.winnerVendorId || line.winnerLineTotal == null) continue;
+    const baselineQuote = getQuote(dataset, baselineId, line.lineItemId);
+    if (!usable(baselineQuote)) continue;
+
+    awardedLines += 1;
+    const baselineLineTotal = round2(baselineQuote.evaluatedValue! * line.quantity);
+    const contribution = round2(baselineLineTotal - line.winnerLineTotal);
+    totalSaving = round2(totalSaving + contribution);
+
+    // A line only counts as exposed if it actually earns saving. A row the split
+    // loses money on is a different conversation.
+    if (contribution <= 0) continue;
+
+    const q = getQuote(dataset, line.winnerVendorId, line.lineItemId);
+    if (!q) continue;
+
+    const reasons: string[] = [];
+    if (outliers.has(`${line.winnerVendorId}:${line.lineItemId}`)) {
+      reasons.push("the price is far outside what every other vendor quoted for this line");
+    }
+    if (q.sourceCurrency && q.sourceCurrency !== dataset.baseCurrency) {
+      reasons.push(
+        `it was quoted in ${q.sourceCurrency} and converted at ${q.fxRate ? q.fxRate.rate : "the reference rate on file"}`,
+      );
+    }
+    if (!q.sourceUnit || !q.sourceUnit.trim()) {
+      reasons.push(`no unit was stated, so it was read as a rate per ${line.unit}`);
+    } else if (q.sourceValue != null && q.normalizedValue != null && q.normalizedValue !== 0) {
+      const inBase = q.fxRate ? q.sourceValue * q.fxRate.rate : q.sourceValue;
+      const factor = inBase / q.normalizedValue;
+      const nearest = Math.round(factor);
+      if (Math.abs(factor - 1) > 0.01) {
+        const shown = nearest > 0 && Math.abs(factor - nearest) / nearest < 0.01 ? nearest : round2(factor);
+        reasons.push(`it was quoted per "${q.sourceUnit}" and divided by ${shown} to reach a rate per ${line.unit}`);
+      }
+    }
+
+    if (reasons.length === 0) continue;
+
+    atRisk.push({
+      lineItemId: line.lineItemId,
+      lineItemName: line.lineItemName,
+      vendorName: line.winnerVendorName ?? "the awarded vendor",
+      quantity: line.quantity,
+      unit: line.unit,
+      evaluatedUnitPrice: line.winnerUnitPrice ?? 0,
+      savingContribution: contribution,
+      sharePct: 0,
+      reasons,
+    });
+  }
+
+  const atRiskTotal = round2(atRisk.reduce((sum, r) => sum + r.savingContribution, 0));
+  for (const r of atRisk) {
+    r.sharePct = totalSaving > 0 ? Math.round((r.savingContribution / totalSaving) * 1000) / 10 : 0;
+  }
+  atRisk.sort((a, b) => b.savingContribution - a.savingContribution);
+
+  return {
+    totalSaving,
+    baselineVendorName: split.bestSingleVendorName ?? null,
+    awardedLines,
+    atRisk,
+    atRiskTotal,
+    atRiskSharePct: totalSaving > 0 ? Math.round((atRiskTotal / totalSaving) * 1000) / 10 : 0,
+    unaffectedTotal: round2(totalSaving - atRiskTotal),
+    note:
+      "Exposure, not error. These lines earn part of the saving on values that were converted, assumed or contradicted by the other responses. Confirming them is what turns the figure from provisional into defensible.",
+  };
+}
+
 // ---------------------------------------------------------------- scenarios
 
 export interface ScenarioDiscountResult {
