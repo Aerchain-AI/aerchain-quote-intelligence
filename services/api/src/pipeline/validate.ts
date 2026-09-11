@@ -156,6 +156,41 @@ export function buildImplicitMissingTaxException(
   };
 }
 
+/**
+ * The case where a document quotes nothing in this RFx at all.
+ *
+ * Reported on its own because "the vendor did not quote this item", thirty
+ * times over, is a false account of what happened. A supplier who answers an
+ * RFx quotes some of it; nought out of thirty almost always means the file
+ * belongs to a different event, and a buyer told "not quoted" thirty times will
+ * go and chase a vendor who already sent them a full price list.
+ *
+ * The test is deterministic: no line matched. The unmatched rows the model
+ * listed are quoted back as evidence, but the finding does not depend on them.
+ */
+export function buildUnmatchedDocumentException(
+  lineStatuses: Array<{ status: QuoteStatus }>,
+  unmatchedRows: string[] | undefined,
+): ExceptionDraft | null {
+  if (lineStatuses.length === 0) return null;
+  if (lineStatuses.some((l) => l.status !== "not_quoted")) return null;
+
+  const sample = (unmatchedRows ?? []).slice(0, 4);
+  const evidence = sample.length
+    ? ` It does price ${unmatchedRows!.length} row(s) that belong to no item here, such as: ${sample.join("; ")}.`
+    : "";
+
+  return {
+    lineItemId: null,
+    type: "unmatched_document",
+    message:
+      `None of the ${lineStatuses.length} items in this RFx were found in this document.${evidence}` +
+      ` Check that this response was sent for this event before chasing the vendor for prices — a` +
+      ` quotation written against a different RFx reads as a vendor who quoted nothing.`,
+    severity: "critical",
+  };
+}
+
 /** Deterministic quality-gate aggregation over LLM-judged per-question pass/fail.
  * The LLM decides whether an individual answer reads as pass/fail/unclear; this
  * function only applies the fixed "any gating question failing gates the vendor"

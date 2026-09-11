@@ -6,6 +6,7 @@ import {
   buildDocumentLevelExceptions,
   buildImplicitMissingTaxException,
   buildQualityExceptions,
+  buildUnmatchedDocumentException,
   summarizeVendor,
   validateLine,
 } from "../src/pipeline/validate.js";
@@ -163,5 +164,34 @@ describe("summarizeVendor", () => {
     expect(summary.status).toBe("review_required");
     expect(summary.itemsFoundCount).toBe(27);
     expect(summary.itemsMissingCount).toBe(3);
+  });
+});
+
+describe("buildUnmatchedDocumentException", () => {
+  const notQuoted = (n: number) => Array.from({ length: n }, () => ({ status: "not_quoted" as const }));
+
+  it("says nothing when at least one item was matched", () => {
+    const mixed = [...notQuoted(29), { status: "verified" as const }];
+    expect(buildUnmatchedDocumentException(mixed, ["something"])).toBeNull();
+  });
+
+  it("raises one finding when nothing in the RFx was found", () => {
+    const result = buildUnmatchedDocumentException(notQuoted(30), []);
+    expect(result?.type).toBe("unmatched_document");
+    expect(result?.severity).toBe("critical");
+    expect(result?.message).toMatch(/None of the 30 items/);
+  });
+
+  it("quotes the unmatched rows back as evidence", () => {
+    const result = buildUnmatchedDocumentException(notQuoted(30), [
+      "5-Ply Corrugated Box – Small",
+      "Kraft Paper Tape",
+    ]);
+    expect(result?.message).toContain("5-Ply Corrugated Box – Small");
+    expect(result?.message).toMatch(/2 row\(s\)/);
+  });
+
+  it("does not depend on the model listing them", () => {
+    expect(buildUnmatchedDocumentException(notQuoted(30), undefined)?.type).toBe("unmatched_document");
   });
 });

@@ -113,6 +113,7 @@ export type ExceptionType =
   | "lead_time_concern"
   | "quality_failure"
   | "quality_unresolved"
+  | "unmatched_document"
   | "ambiguous_value";
 
 export type ExceptionSeverity = "info" | "warning" | "critical";

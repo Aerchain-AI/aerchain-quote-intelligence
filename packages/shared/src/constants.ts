@@ -93,5 +93,6 @@ export const EXCEPTION_LABELS: Record<ExceptionType, string> = {
   lead_time_concern: "Lead-time concern",
   quality_failure: "Answered no to a quality questionnaire criterion",
   quality_unresolved: "Quality questionnaire left unanswered — unknown, not failed",
+  unmatched_document: "Document does not quote the items in this RFx",
   ambiguous_value: "Ambiguous or illegible value",
 };

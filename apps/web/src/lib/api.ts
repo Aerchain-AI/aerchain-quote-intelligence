@@ -9,12 +9,28 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function post<T>(path: string, body: unknown, timeoutMs?: number): Promise<T> {
+  // Some requests wait on a model, and a request that never settles is worse
+  // than one that fails: the caller has no way to move on. A timeout here turns
+  // a hang into an error the queue can act on.
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller?.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new Error(`No answer after ${Math.round((timeoutMs ?? 0) / 1000)}s. The server may still be working on it.`);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     throw new Error(detail.detail ?? detail.error ?? `${res.status} ${res.statusText}`);
@@ -699,7 +715,9 @@ export const api = {
   addVendor: (rfxId: string, payload: { name: string; responseFormat: string; textContent?: string; fileBase64?: string }) =>
     post<VendorSummary>(`/rfx/${rfxId}/vendors`, payload),
   processVendor: (rfxId: string, vendorId: string) =>
-    post<{ vendorName: string; status: string }>(`/rfx/${rfxId}/vendors/${vendorId}/process`, {}),
+    // Just past the server's own extraction deadline, so a genuine slow read is
+    // not cut off but a hung request cannot block the queue behind it.
+    post<{ vendorName: string; status: string }>(`/rfx/${rfxId}/vendors/${vendorId}/process`, {}, 270_000),
   updateQuote: (rfxId: string, vendorId: string, quoteId: string, payload: Record<string, unknown>) =>
     patch<Quote>(`/rfx/${rfxId}/vendors/${vendorId}/quotes/${quoteId}`, payload),
   deleteVendorResponse: (rfxId: string, vendorId: string) =>

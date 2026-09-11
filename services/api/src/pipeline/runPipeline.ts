@@ -9,6 +9,7 @@ import {
   buildDocumentLevelExceptions,
   buildImplicitMissingTaxException,
   buildQualityExceptions,
+  buildUnmatchedDocumentException,
   summarizeVendor,
   validateLine,
   type ExceptionDraft,
@@ -133,6 +134,11 @@ export async function runPipelineForVendor(vendorId: string): Promise<PipelineRu
   if (implicitTax) exceptionDrafts.push(implicitTax);
   const qualityExceptions = buildQualityExceptions(extraction.questionnaireResponses);
   exceptionDrafts.push(...qualityExceptions);
+
+  // Nothing in this RFx was found in the document. Said once, plainly, rather
+  // than thirty times as "the vendor did not quote this item".
+  const unmatched = buildUnmatchedDocumentException(lineStatuses, extraction.unmatchedDocumentRows);
+  if (unmatched) exceptionDrafts.push(unmatched);
 
   // An unanswered questionnaire is a reason to look, the same as a failed one.
   const summary = summarizeVendor(lineStatuses, qualityExceptions.length > 0);

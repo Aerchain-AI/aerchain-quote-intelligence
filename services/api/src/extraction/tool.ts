@@ -31,6 +31,15 @@ export interface ExtractionResult {
   lineItems: ExtractedLineItem[];
   questionnaireResponses: ExtractedQuestionnaireResponse[];
   documentLevelNotes: string;
+  /**
+   * Priced rows in the document that match nothing in this RFx.
+   *
+   * Normally short, or empty. When it holds everything the document priced and
+   * no RFx item was matched, the response almost certainly belongs to a
+   * different event, which is a very different problem from a vendor who
+   * declined to quote.
+   */
+  unmatchedDocumentRows?: string[];
 }
 
 export const EXTRACTION_TOOL_NAME = "record_extraction";
@@ -121,6 +130,13 @@ export const EXTRACTION_TOOL: FunctionDeclaration = {
       documentLevelNotes: {
         type: "string",
         description: "Overall commercial terms, freight/discount statements, or caveats that apply broadly rather than to one line item.",
+      },
+      unmatchedDocumentRows: {
+        type: "array",
+        description:
+          "Rows this document prices that correspond to no RFx line item, as they appear in the document. " +
+          "Leave empty when every priced row was matched. Never force a match to empty this list.",
+        items: { type: "string" },
       },
     },
     required: ["vendorName", "lineItems", "questionnaireResponses", "documentLevelNotes"],

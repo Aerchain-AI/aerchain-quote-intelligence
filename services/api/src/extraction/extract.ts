@@ -1,3 +1,11 @@
+/**
+ * How long one document may take before the queue gives up on it.
+ *
+ * Long enough for a slow photographed quotation plus one retry; short enough
+ * that four other responses are not left waiting on it.
+ */
+const EXTRACTION_DEADLINE_MS = 240_000;
+
 import path from "node:path";
 import { FunctionCallingConfigMode, type Part } from "@google/genai";
 import type { LineItem, VendorResponseFormat } from "@aerchain/shared";
@@ -43,6 +51,9 @@ Rules you must follow:
   quoted: false. Do not fill the gap from a neighbouring row. An unquoted item is a normal, expected
   outcome — an invented price is a serious error.
 - Every value you report must be traceable: give a real, checkable sourceLocation and sourceExcerpt.
+- If the document prices rows that correspond to nothing in the RFx list, name them in unmatchedDocumentRows.
+  A document whose every row is unmatched is usually a response to a different RFx; say so there rather than
+  forcing matches to make the list look complete.
 - Call the record_extraction function exactly once with everything you found. This is the only output you produce.`;
 
 async function loadDocumentContent(
@@ -104,29 +115,40 @@ export async function extractVendorDocument(params: {
 
   const model = extractionModelFor(responseFormat);
   // The key pool handles quota failover across keys and transient retries.
-  const response = await getKeyPool().runWithFailover({
-    model,
-    run: (client) =>
-      client.models.generateContent({
-        model,
-        contents: [{ role: "user", parts }],
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          // A full 30-item extraction plus 10 questionnaire answers is a large
-          // structured payload. Too low a cap truncates the function call mid-JSON
-          // and the SDK then surfaces no call at all.
-          maxOutputTokens: 32768,
-          httpOptions: { timeout: 150_000 },
-          tools: [{ functionDeclarations: [EXTRACTION_TOOL] }],
-          toolConfig: {
-            functionCallingConfig: {
-              mode: FunctionCallingConfigMode.ANY,
-              allowedFunctionNames: [EXTRACTION_TOOL_NAME],
+  //
+  // With no deadline it would work through three keys at two attempts each, and
+  // every attempt is allowed 150 seconds: a quarter of an hour of silence with
+  // nothing on screen but a spinner, and a queue of other responses stuck
+  // behind it. A photographed quotation is the slowest format and the most
+  // likely to hit a busy service, so it is the one that stalls. Bounded here at
+  // four minutes, which is room for one slow read and a retry, and short enough
+  // that the queue moves on to the next file while the buyer is still watching.
+  const response = await getKeyPool().runWithFailover(
+    {
+      model,
+      run: (client) =>
+        client.models.generateContent({
+          model,
+          contents: [{ role: "user", parts }],
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+            // A full 30-item extraction plus 10 questionnaire answers is a large
+            // structured payload. Too low a cap truncates the function call mid-JSON
+            // and the SDK then surfaces no call at all.
+            maxOutputTokens: 32768,
+            httpOptions: { timeout: 150_000 },
+            tools: [{ functionDeclarations: [EXTRACTION_TOOL] }],
+            toolConfig: {
+              functionCallingConfig: {
+                mode: FunctionCallingConfigMode.ANY,
+                allowedFunctionNames: [EXTRACTION_TOOL_NAME],
+              },
             },
           },
-        },
-      }),
-  });
+        }),
+    },
+    { deadlineMs: EXTRACTION_DEADLINE_MS },
+  );
 
   const call = response.functionCalls?.[0];
   if (!call || call.name !== EXTRACTION_TOOL_NAME || !call.args) {

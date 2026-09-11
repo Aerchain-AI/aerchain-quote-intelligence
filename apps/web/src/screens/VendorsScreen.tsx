@@ -29,9 +29,13 @@ interface QueueItem {
   key: string;
   payload: FilePayload;
   vendorId: string | null;
-  status: "waiting" | "uploading" | "extracting" | "done" | "failed";
+  status: "waiting" | "uploading" | "extracting" | "done" | "failed" | "skipped";
   attempts: number;
   error: string | null;
+  /** When the current attempt began, so the row can show how long it has run. */
+  startedAt: number | null;
+  /** Set when the buyer asks to move on without waiting for this one. */
+  skipRequested: boolean;
 }
 
 /**
@@ -112,8 +116,15 @@ export default function VendorsScreen({
    */
   const runItem = async (item: QueueItem) => {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      if (item.skipRequested) {
+        item.status = "skipped";
+        item.startedAt = null;
+        syncQueue();
+        return;
+      }
       item.attempts = attempt;
       item.error = null;
+      item.startedAt = Date.now();
       try {
         if (!item.vendorId) {
           item.status = "uploading";
@@ -133,12 +144,14 @@ export default function VendorsScreen({
         await api.processVendor(rfxId, item.vendorId);
 
         item.status = "done";
+        item.startedAt = null;
         syncQueue();
         return;
       } catch (err) {
         item.error = (err as Error).message;
-        if (attempt === MAX_ATTEMPTS) {
-          item.status = "failed";
+        if (attempt === MAX_ATTEMPTS || item.skipRequested) {
+          item.status = item.skipRequested ? "skipped" : "failed";
+          item.startedAt = null;
           syncQueue();
           return;
         }
@@ -178,10 +191,30 @@ export default function VendorsScreen({
         status: "waiting" as const,
         attempts: 0,
         error: null,
+        startedAt: null,
+        skipRequested: false,
       })),
     ];
     syncQueue();
     void drainQueue();
+  };
+
+  /**
+   * Stop waiting on this one and let the rest through.
+   *
+   * The request already running cannot be recalled, so the flag is read between
+   * attempts rather than mid-flight. What it buys the buyer is that a slow file
+   * stops costing them the other four.
+   */
+  const skipQueued = (key: string) => {
+    const item = queueRef.current.find((i) => i.key === key);
+    if (!item) return;
+    item.skipRequested = true;
+    if (item.status === "waiting") {
+      item.status = "skipped";
+      item.startedAt = null;
+    }
+    syncQueue();
   };
 
   /** A file that used up its three attempts, sent round again by hand. */
@@ -191,12 +224,14 @@ export default function VendorsScreen({
     item.status = "waiting";
     item.attempts = 0;
     item.error = null;
+    item.startedAt = null;
+    item.skipRequested = false;
     syncQueue();
     void drainQueue();
   };
 
   const clearFinishedQueue = () => {
-    queueRef.current = queueRef.current.filter((i) => i.status !== "done");
+    queueRef.current = queueRef.current.filter((i) => i.status !== "done" && i.status !== "skipped");
     syncQueue();
   };
 
@@ -228,7 +263,12 @@ export default function VendorsScreen({
     <div className="space-y-4">
       <IngestionDropzone onUpload={handleUpload} busy={queueView.some((i) => i.status !== "done")} />
 
-      <UploadQueue items={queueView} onRetry={retryQueued} onClearDone={clearFinishedQueue} />
+      <UploadQueue
+        items={queueView}
+        onRetry={retryQueued}
+        onSkip={skipQueued}
+        onClearDone={clearFinishedQueue}
+      />
 
       <p className="text-[13px] text-[var(--ink-secondary)]">
         {vendors.length} vendors responded in {new Set(vendors.map((v) => v.responseFormat)).size} different formats.
@@ -409,17 +449,31 @@ function PipelineAnimation() {
 function UploadQueue({
   items,
   onRetry,
+  onSkip,
   onClearDone,
 }: {
   items: QueueItem[];
   onRetry: (key: string) => void;
+  onSkip: (key: string) => void;
   onClearDone: () => void;
 }) {
+  // A row that has been running for two minutes should say so. A spinner with
+  // no elapsed time is the difference between "slow" and "stuck", and the buyer
+  // is the one who has to tell them apart.
+  const [now, setNow] = useState(Date.now());
+  const running = items.some((i) => i.startedAt != null);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+
   if (items.length === 0) return null;
 
   const done = items.filter((i) => i.status === "done").length;
   const failed = items.filter((i) => i.status === "failed").length;
-  const pending = items.length - done - failed;
+  const skipped = items.filter((i) => i.status === "skipped").length;
+  const pending = items.length - done - failed - skipped;
 
   const label: Record<QueueItem["status"], string> = {
     waiting: "Waiting",
@@ -427,6 +481,7 @@ function UploadQueue({
     extracting: "Extracting",
     done: "Extracted",
     failed: "Failed",
+    skipped: "Skipped",
   };
   const tone: Record<QueueItem["status"], string> = {
     waiting: "var(--ink-muted)",
@@ -434,6 +489,7 @@ function UploadQueue({
     extracting: "var(--info)",
     done: "var(--good)",
     failed: "var(--critical)",
+    skipped: "var(--warning)",
   };
 
   return (
@@ -444,7 +500,8 @@ function UploadQueue({
           <p className="mt-0.5 text-[11.5px] text-[var(--ink-muted)]">
             One at a time, in order. {done} extracted
             {pending > 0 ? `, ${pending} to go` : ""}
-            {failed > 0 ? `, ${failed} failed` : ""}.
+            {failed > 0 ? `, ${failed} failed` : ""}
+            {skipped > 0 ? `, ${skipped} skipped` : ""}. A photographed quotation is the slowest to read.
           </p>
         </div>
         {done > 0 && (
@@ -468,11 +525,21 @@ function UploadQueue({
               )}
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <span className="text-[11.5px] font-medium" style={{ color: tone[item.status] }}>
+              <span className="num text-[11.5px] font-medium" style={{ color: tone[item.status] }}>
                 {label[item.status]}
+                {item.startedAt ? ` · ${Math.max(0, Math.round((now - item.startedAt) / 1000))}s` : ""}
                 {item.status !== "done" && item.attempts > 1 ? ` · attempt ${item.attempts} of ${MAX_ATTEMPTS}` : ""}
               </span>
-              {item.status === "failed" && (
+              {(item.status === "extracting" || item.status === "uploading" || item.status === "waiting") &&
+                !item.skipRequested && (
+                  <button
+                    onClick={() => onSkip(item.key)}
+                    className="pressable rounded-md px-2 py-1 text-[11.5px] font-medium text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+                  >
+                    Skip
+                  </button>
+                )}
+              {(item.status === "failed" || item.status === "skipped") && (
                 <button
                   onClick={() => onRetry(item.key)}
                   className="pressable rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
