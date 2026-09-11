@@ -157,6 +157,28 @@ export function buildImplicitMissingTaxException(
 }
 
 /**
+ * Which model read the file, when it was not the one we would have chosen.
+ *
+ * A weaker read looks exactly like a good one on screen: same table, same
+ * confidence figures, same green ticks. The only honest thing is to say so, so
+ * a buyer knows to check this one against the image and not the other four.
+ */
+export function buildModelDowngradeException(
+  readByModel: string | undefined,
+  downgradedFromModel: string | undefined,
+): ExceptionDraft | null {
+  if (!downgradedFromModel || !readByModel) return null;
+  return {
+    lineItemId: null,
+    type: "low_confidence",
+    message:
+      `Read by ${readByModel} because ${downgradedFromModel} was unavailable. The fallback model is less ` +
+      `accurate on photographed documents — check these figures against the source image before relying on them.`,
+    severity: "warning",
+  };
+}
+
+/**
  * The case where a document quotes nothing in this RFx at all.
  *
  * Reported on its own because "the vendor did not quote this item", thirty

@@ -40,6 +40,10 @@ export interface ExtractionResult {
    * declined to quote.
    */
   unmatchedDocumentRows?: string[];
+  /** Set by the pipeline, not the model: which model actually read the file. */
+  readByModel?: string;
+  /** Set when the preferred model was unavailable and a weaker one was used. */
+  downgradedFromModel?: string;
 }
 
 export const EXTRACTION_TOOL_NAME = "record_extraction";

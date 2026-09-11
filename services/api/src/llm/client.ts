@@ -30,6 +30,23 @@ export function extractionModelFor(responseFormat: string): string {
   return responseFormat === "jpg" || responseFormat === "png" ? GEMINI_MODEL_VISION : GEMINI_MODEL_LITE;
 }
 
+/**
+ * The models that can read this format, best first.
+ *
+ * A photographed quotation is read by the larger model because it is better at
+ * a skewed phone picture of a table. That model is also the one with the
+ * smallest free-tier allowance, and when its daily quota is gone the buyer used
+ * to get nothing at all: the whole upload failed while the four typed responses
+ * beside it went through. The smaller model does read images, measurably less
+ * well, and a read the buyer can check beats no read, so it stands behind as a
+ * fallback rather than the upload being refused.
+ */
+export function extractionModelsFor(responseFormat: string): string[] {
+  return responseFormat === "jpg" || responseFormat === "png"
+    ? [GEMINI_MODEL_VISION, GEMINI_MODEL_LITE]
+    : [GEMINI_MODEL_LITE];
+}
+
 /** Intent routing plus prose explanation — easier work than reading a photographed
  * quotation, and it runs many times in a demo. */
 export const GEMINI_COPILOT_MODEL = GEMINI_MODEL_LITE;

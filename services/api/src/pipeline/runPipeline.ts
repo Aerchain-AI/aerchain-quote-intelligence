@@ -9,6 +9,7 @@ import {
   buildDocumentLevelExceptions,
   buildImplicitMissingTaxException,
   buildQualityExceptions,
+  buildModelDowngradeException,
   buildUnmatchedDocumentException,
   summarizeVendor,
   validateLine,
@@ -139,6 +140,9 @@ export async function runPipelineForVendor(vendorId: string): Promise<PipelineRu
   // than thirty times as "the vendor did not quote this item".
   const unmatched = buildUnmatchedDocumentException(lineStatuses, extraction.unmatchedDocumentRows);
   if (unmatched) exceptionDrafts.push(unmatched);
+
+  const downgrade = buildModelDowngradeException(extraction.readByModel, extraction.downgradedFromModel);
+  if (downgrade) exceptionDrafts.push(downgrade);
 
   // An unanswered questionnaire is a reason to look, the same as a failed one.
   const summary = summarizeVendor(lineStatuses, qualityExceptions.length > 0);

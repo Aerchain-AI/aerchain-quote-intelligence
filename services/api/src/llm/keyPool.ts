@@ -103,6 +103,16 @@ export class ApiKeyPool {
     return `${keyIndex}:${model}`;
   }
 
+  /**
+   * Whether any key could serve this model right now.
+   *
+   * Lets a caller pick a different model before spending a deadline finding out
+   * that every key for this one is parked until tomorrow.
+   */
+  hasCapacityFor(model: string): boolean {
+    return this.keys.some((k) => this.isAvailable(k, model));
+  }
+
   private isAvailable(key: PooledKey, model: string): boolean {
     const until = this.cooldowns.get(this.cooldownKey(key.index, model));
     return until == null || Date.now() >= until;

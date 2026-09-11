@@ -1,15 +1,7 @@
-/**
- * How long one document may take before the queue gives up on it.
- *
- * Long enough for a slow photographed quotation plus one retry; short enough
- * that four other responses are not left waiting on it.
- */
-const EXTRACTION_DEADLINE_MS = 240_000;
-
 import path from "node:path";
 import { FunctionCallingConfigMode, type Part } from "@google/genai";
 import type { LineItem, VendorResponseFormat } from "@aerchain/shared";
-import { extractionModelFor, getKeyPool } from "../llm/client.js";
+import { extractionModelsFor, getKeyPool } from "../llm/client.js";
 import { classifyDocument } from "./classify.js";
 import { parseDocx } from "./parsers/docxParser.js";
 import { parseImage } from "./parsers/imageParser.js";
@@ -21,6 +13,14 @@ import {
   EXTRACTION_TOOL_NAME,
   type ExtractionResult,
 } from "./tool.js";
+
+/**
+ * How long one document may take before the queue gives up on it.
+ *
+ * Long enough for a slow photographed quotation plus one retry; short enough
+ * that four other responses are not left waiting on it.
+ */
+const EXTRACTION_DEADLINE_MS = 240_000;
 
 function rfxItemsBlock(lineItems: LineItem[]): string {
   return lineItems
@@ -113,42 +113,69 @@ export async function extractVendorDocument(params: {
       ]
     : [{ text: instructions }];
 
-  const model = extractionModelFor(responseFormat);
-  // The key pool handles quota failover across keys and transient retries.
+  // The models that can read this format, best first. The pool fails over
+  // between keys; this fails over between models, which is a different outage.
   //
-  // With no deadline it would work through three keys at two attempts each, and
-  // every attempt is allowed 150 seconds: a quarter of an hour of silence with
-  // nothing on screen but a spinner, and a queue of other responses stuck
-  // behind it. A photographed quotation is the slowest format and the most
-  // likely to hit a busy service, so it is the one that stalls. Bounded here at
-  // four minutes, which is room for one slow read and a retry, and short enough
-  // that the queue moves on to the next file while the buyer is still watching.
-  const response = await getKeyPool().runWithFailover(
-    {
-      model,
-      run: (client) =>
-        client.models.generateContent({
-          model,
-          contents: [{ role: "user", parts }],
-          config: {
-            systemInstruction: SYSTEM_PROMPT,
-            // A full 30-item extraction plus 10 questionnaire answers is a large
-            // structured payload. Too low a cap truncates the function call mid-JSON
-            // and the SDK then surfaces no call at all.
-            maxOutputTokens: 32768,
-            httpOptions: { timeout: 150_000 },
-            tools: [{ functionDeclarations: [EXTRACTION_TOOL] }],
-            toolConfig: {
-              functionCallingConfig: {
-                mode: FunctionCallingConfigMode.ANY,
-                allowedFunctionNames: [EXTRACTION_TOOL_NAME],
+  // The deadline matters as much as the fallback. Without one the pool would
+  // work through three keys at two attempts each, every attempt allowed 150
+  // seconds: a quarter of an hour of silence with nothing on screen but a
+  // spinner, and a queue of other responses stuck behind it. Four minutes is
+  // room for one slow read and a retry, and short enough that the queue moves
+  // on while the buyer is still watching.
+  const pool = getKeyPool();
+  const candidates = extractionModelsFor(responseFormat);
+
+  // Skip a model the pool already knows is parked rather than spending the
+  // deadline rediscovering it. If every candidate is parked, the first is still
+  // attempted, so the error the buyer reads is the real one from the service.
+  const withCapacity = candidates.filter((m: string) => pool.hasCapacityFor(m));
+  const order = withCapacity.length > 0 ? withCapacity : candidates.slice(0, 1);
+
+  const runWith = (model: string) =>
+    pool.runWithFailover(
+      {
+        model,
+        run: (client) =>
+          client.models.generateContent({
+            model,
+            contents: [{ role: "user", parts }],
+            config: {
+              systemInstruction: SYSTEM_PROMPT,
+              // A full 30-item extraction plus 10 questionnaire answers is a large
+              // structured payload. Too low a cap truncates the function call mid-JSON
+              // and the SDK then surfaces no call at all.
+              maxOutputTokens: 32768,
+              httpOptions: { timeout: 150_000 },
+              tools: [{ functionDeclarations: [EXTRACTION_TOOL] }],
+              toolConfig: {
+                functionCallingConfig: {
+                  mode: FunctionCallingConfigMode.ANY,
+                  allowedFunctionNames: [EXTRACTION_TOOL_NAME],
+                },
               },
             },
-          },
-        }),
-    },
-    { deadlineMs: EXTRACTION_DEADLINE_MS },
-  );
+          }),
+      },
+      { deadlineMs: EXTRACTION_DEADLINE_MS },
+    );
+
+  let response: Awaited<ReturnType<typeof runWith>> | null = null;
+  let model = order[0];
+  let downgradedFrom: string | null = null;
+  const failures: string[] = [];
+
+  for (const candidate of order) {
+    try {
+      response = await runWith(candidate);
+      model = candidate;
+      if (candidate !== candidates[0]) downgradedFrom = candidates[0];
+      break;
+    } catch (err) {
+      failures.push(`${candidate}: ${(err as Error).message}`);
+    }
+  }
+
+  if (!response) throw new Error(failures.join(" | "));
 
   const call = response.functionCalls?.[0];
   if (!call || call.name !== EXTRACTION_TOOL_NAME || !call.args) {
@@ -169,5 +196,14 @@ export async function extractVendorDocument(params: {
         (textPart ? ` Model said: "${textPart.slice(0, 200)}"` : ""),
     );
   }
-  return call.args as unknown as ExtractionResult;
+  const result = call.args as unknown as ExtractionResult;
+
+  // Which model actually read it. A photograph read by the smaller model is a
+  // weaker read, and the buyer is owed that fact next to the figures rather than
+  // a silently worse result that looks identical to a good one. Recorded as its
+  // own field: folding it into documentLevelNotes put it inside the freight and
+  // tax findings, which are about the vendor's terms, not about our plumbing.
+  result.readByModel = model;
+  if (downgradedFrom) result.downgradedFromModel = downgradedFrom;
+  return result;
 }
